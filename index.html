@@ -481,6 +481,12 @@ body::after{
   <div class="nav-right">
     <div class="live-badge">LIVE</div>
     <div class="hand-count" id="handLabel">HAND #—</div>
+    <select id="speedSel" onchange="updateSpeed()" style="background:rgba(212,162,52,.08);border:1px solid rgba(212,162,52,.25);border-radius:6px;color:var(--gold);font-family:'Special Elite',cursive;font-size:.6rem;padding:.22rem .5rem;cursor:pointer;">
+      <option value="2">⚡ Fast</option>
+      <option value="1" selected>🎬 Normal</option>
+      <option value="0.5">🎭 Slow</option>
+      <option value="0.3">🔬 Study</option>
+    </select>
     <div class="status-tag loading" id="statusTag">⟳ SYNCING</div>
     <div class="clock-el" id="clockEl">00:00:00</div>
   </div>
@@ -660,16 +666,48 @@ body::after{
 <script>
 'use strict';
 /* ════════════════════════════════════════════════════════════════
-   CONFIG — REPLACE zengineco everywhere in this file
+   SHOWDOWN SALOON — SYNCHRONIZED DISPLAY ENGINE v3
+   
+   LIVE SYNC MODEL:
+   ─────────────────────────────────────────────────────────────
+   Every hand occupies exactly 28 seconds of wall-clock time.
+   Hand index = floor((now - genesis) / 28000)
+   
+   Within each 28-second window, the hand plays through fixed
+   phase boundaries — the same for every viewer on earth:
+   
+     0.0s – 2.0s   DEAL        Cards slide out to seats
+     2.0s – 9.5s   PRE-FLOP    Actions play one by one
+     9.5s – 15.5s  FLOP        Board reveals, actions play
+    15.5s – 20.5s  TURN        Turn card, actions play
+    20.5s – 25.0s  RIVER       River card, actions play
+    25.0s – 28.0s  RESULT      Winner announced, chips fly
+   
+   A viewer joining at second 17 sees the turn in progress.
+   A viewer joining at second 26 sees the result.
+   Nobody is ever watching a different hand than anyone else.
+   
+   Speed selector = REPLAY speed only (history panel).
+   The live table is always locked to wall clock.
+   ─────────────────────────────────────────────────────────────
 ════════════════════════════════════════════════════════════════ */
-const DATA_URL    = 'https://raw.githubusercontent.com/zengineco/halls-of-history-data/main/history.json';
-const HAND_INTERVAL_SEC = 28;
-const GENESIS_MS  = Date.UTC(2026, 1, 22, 0, 0, 0);
-const POLL_MS     = 60_000;
 
-/* ════════════════════════════════════════════════════════════════
-   SEAT DEFINITIONS
-════════════════════════════════════════════════════════════════ */
+const DATA_URL          = 'https://raw.githubusercontent.com/zengineco/halls-of-history-data/main/history.json';
+const HAND_INTERVAL_MS  = 28_000;
+const GENESIS_MS        = Date.UTC(2026, 1, 22, 0, 0, 0);
+const POLL_MS           = 55_000; // poll for new ledger data
+
+// ── Phase map: each phase has a start second and end second within the 28s window
+const PHASES = [
+  { id:'deal',    label:'',          start: 0.0, end: 2.0  },
+  { id:'preflop', label:'PRE-FLOP',  start: 2.0, end: 9.5  },
+  { id:'flop',    label:'FLOP',      start: 9.5, end:15.5  },
+  { id:'turn',    label:'TURN',      start:15.5, end:20.5  },
+  { id:'river',   label:'RIVER',     start:20.5, end:25.0  },
+  { id:'result',  label:'SHOWDOWN',  start:25.0, end:28.0  },
+];
+
+// ── Seats
 const SEATS = [
   {name:'GPT-5.2',        short:'GPT-5.2',  emoji:'🤖', arch:'LAG',
    bio:'Balanced-aggressive. Wide opens in position. Multi-street bluffs. Slight tendency to over-value top-pair hands.'},
@@ -692,283 +730,367 @@ const SEATS = [
 ];
 const N = 9;
 
-/* ════════════════════════════════════════════════════════════════
-   CHIP COLORS
-════════════════════════════════════════════════════════════════ */
-const CHIP_COLORS={
-  1:'#888', 2:'#3355cc', 5:'#cc2233', 25:'#33aa22', 100:'#b8862a'
-};
-function chipClass(val){
-  if(val>=100)return'c100';if(val>=25)return'c25';if(val>=5)return'c5';if(val>=2)return'c2';return'c1';
-}
-function chipsForAmount(amt){
-  const denoms=[100,25,5,2,1];const out=[];let rem=amt;
-  for(const d of denoms){while(rem>=d&&out.length<10){out.push(d);rem-=d;}}
+// ── Chip colors
+const CHIP_CLR = {1:'#888',2:'#3355cc',5:'#cc2233',25:'#33aa22',100:'#b8862a'};
+function chipCls(v){if(v>=100)return'c100';if(v>=25)return'c25';if(v>=5)return'c5';if(v>=2)return'c2';return'c1';}
+function chipsFor(amt){
+  const D=[100,25,5,2,1],out=[];let r=Math.min(amt,500);
+  for(const d of D)while(r>=d&&out.length<12){out.push(d);r-=d;}
   return out;
 }
 
-/* ════════════════════════════════════════════════════════════════
-   STATE
-════════════════════════════════════════════════════════════════ */
-let ledger=null;
-let displayedHandIdx=-1;
-let displayQueue=[];
-let isPlaying=false;
-let lastFetch=0;
+// ════════════════════════════════════════════════════════════════
+// CLOCK — where are we in the current hand RIGHT NOW
+// ════════════════════════════════════════════════════════════════
+function nowHandIdx(){
+  return Math.floor((Date.now() - GENESIS_MS) / HAND_INTERVAL_MS);
+}
+function elapsedInHand(){
+  return ((Date.now() - GENESIS_MS) % HAND_INTERVAL_MS) / 1000; // seconds 0–28
+}
+function currentPhase(){
+  const e = elapsedInHand();
+  return PHASES.find(p => e >= p.start && e < p.end) || PHASES[PHASES.length-1];
+}
+function secsToNextHand(){
+  return (HAND_INTERVAL_MS - (Date.now() - GENESIS_MS) % HAND_INTERVAL_MS) / 1000;
+}
 
-/* ════════════════════════════════════════════════════════════════
-   FETCH LEDGER
-════════════════════════════════════════════════════════════════ */
+// ════════════════════════════════════════════════════════════════
+// STATE
+// ════════════════════════════════════════════════════════════════
+let ledger       = null;
+let lastFetch    = 0;
+let liveHandIdx  = -1;   // which hand is currently rendered on the table
+let liveHand     = null; // the hand object being displayed
+let replayQueue  = [];   // for history replay only
+let isReplaying  = false;
+
+// Per-hand render state — tracks what we've already shown this hand
+// so the tick loop can progressively reveal without re-rendering everything
+let renderState = {
+  handIdx: -1,
+  dealtCards: false,
+  preflopIdx: 0,
+  flopRevealed: false,
+  flopIdx: 0,
+  turnRevealed: false,
+  turnIdx: 0,
+  riverRevealed: false,
+  riverIdx: 0,
+  resultShown: false,
+  pot: 0,
+};
+
+// ════════════════════════════════════════════════════════════════
+// LEDGER FETCH
+// ════════════════════════════════════════════════════════════════
 async function fetchLedger(){
   try{
     setStatus('loading','⟳ FETCHING');
-    const r=await fetch(DATA_URL+'?t='+Date.now());
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    ledger=await r.json();
+    const r = await fetch(DATA_URL + '?t=' + Date.now());
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    ledger = await r.json();
     setStatus('ok','✓ LIVE');
-    onLedgerLoaded();
+    renderStats(); renderHistory(); renderArchive();
   }catch(e){
     setStatus('err','✗ OFFLINE');
-    document.getElementById('annBody').textContent='Unable to reach the ledger. Check DATA_URL and that halls-of-history-data is public. '+e.message;
+    document.getElementById('annBody').textContent =
+      'Unable to reach ledger. Check DATA_URL and that halls-of-history-data is public. ' + e.message;
   }
 }
 
-function setStatus(type,text){
-  const el=document.getElementById('statusTag');el.className='status-tag '+type;el.textContent=text;
+function setStatus(t,txt){
+  const el=document.getElementById('statusTag');
+  el.className='status-tag '+t; el.textContent=txt;
 }
 
-function onLedgerLoaded(){
-  if(!ledger?.recentHands?.length){
-    document.getElementById('annBody').textContent='Ledger connected. Awaiting first GitHub Action run (within 10 minutes of your first commit to the data repo).';
+function getHandFromLedger(idx){
+  if(!ledger?.recentHands) return null;
+  return ledger.recentHands.find(h => h.handIndex === idx) || null;
+}
+
+// ════════════════════════════════════════════════════════════════
+// MAIN TICK — runs every 250ms, drives the synchronized display
+// ════════════════════════════════════════════════════════════════
+function tick(){
+  // Clock
+  document.getElementById('clockEl').textContent =
+    new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+
+  // Progress bar
+  const elapsed = elapsedInHand();
+  const frac = elapsed / 28;
+  const sLeft = secsToNextHand();
+  document.getElementById('progressBar').style.width = (frac * 100) + '%';
+
+  const idx = nowHandIdx();
+  document.getElementById('handLabel').textContent = 'HAND #' + (idx + 1);
+
+  // Fetch new ledger data periodically
+  if(Date.now() - lastFetch > POLL_MS){
+    lastFetch = Date.now();
+    fetchLedger();
+  }
+
+  // If replaying history, don't touch the live table
+  if(isReplaying) return;
+
+  // ── New hand started — reset and load
+  if(idx !== liveHandIdx){
+    liveHandIdx = idx;
+    liveHand = getHandFromLedger(idx);
+    resetRenderState(idx);
+    resetTable(liveHand);
+    // Update progress label
+    document.getElementById('progressLabel').textContent =
+      liveHand ? `Hand #${idx+1} live · ${sLeft.toFixed(0)}s remaining` : `Hand #${idx+1} · ledger syncing…`;
+  }else{
+    document.getElementById('progressLabel').textContent =
+      liveHand ? `Hand #${idx+1} live · ${sLeft.toFixed(0)}s remaining` : `Hand #${idx+1} · ledger syncing…`;
+  }
+
+  if(!liveHand){
+    // Hand not in ledger yet — show waiting state
+    if(ledger?.recentHands?.length){
+      // Show the most recent hand we have while waiting for this one
+      const newest = ledger.recentHands[ledger.recentHands.length - 1];
+      if(newest && renderState.handIdx !== newest.handIndex){
+        liveHand = newest;
+        resetRenderState(newest.handIndex);
+        resetTable(liveHand);
+      }
+    }
     return;
   }
-  document.getElementById('handLabel').textContent='HAND #'+ledger.meta.totalHands.toLocaleString();
-  // Queue new hands not yet shown
-  const recent=ledger.recentHands;
-  const startFrom=Math.max(0,recent.length-3);
-  for(let i=startFrom;i<recent.length;i++){
-    const h=recent[i];
-    if(h.handIndex>displayedHandIdx&&!displayQueue.find(q=>q.handIndex===h.handIndex)){
-      displayQueue.push(h);
-    }
-  }
-  displayQueue.sort((a,b)=>a.handIndex-b.handIndex);
-  if(!isPlaying) pumpQueue();
-  renderStats();renderHistory();renderArchive();
+
+  // ── Progressive reveal based on wall-clock phase
+  const phase = currentPhase();
+  progressiveRender(phase, elapsed);
 }
 
-/* ════════════════════════════════════════════════════════════════
-   DISPLAY QUEUE — animated hand playback
-════════════════════════════════════════════════════════════════ */
-function pumpQueue(){
-  if(!displayQueue.length){isPlaying=false;return;}
-  isPlaying=true;
-  const hand=displayQueue.shift();
-  playHand(hand).then(()=>{
-    const delay=displayQueue.length>1?2500:8000;
-    setTimeout(pumpQueue,delay);
-  });
+// ════════════════════════════════════════════════════════════════
+// PROGRESSIVE RENDER — reveals hand state based on elapsed seconds
+// ════════════════════════════════════════════════════════════════
+function progressiveRender(phase, elapsed){
+  const h = liveHand;
+  const rs = renderState;
+
+  // DEAL phase (0–2s): show all hole cards
+  if(elapsed >= PHASES[0].start && !rs.dealtCards){
+    rs.dealtCards = true;
+    showAllHoleCards(h);
+    setStreet('');
+    appendLog({t:'hdr', s:`━━ HAND #${h.handNumber} ━━ ${SEATS[h.dealer].short} deals ━━`});
+    appendLog({t:'act', s:`${SEATS[h.sb].short} posts SB $1  ·  ${SEATS[h.bb].short} posts BB $2`});
+    showBet(h.sb, 1); showBet(h.bb, 2);
+    rs.pot = 3; updatePot(rs.pot);
+  }
+
+  // PRE-FLOP: reveal actions one at a time across the phase window
+  if(elapsed >= PHASES[1].start && phase.id !== 'deal'){
+    const actions = h.actions?.preflop || [];
+    const phaseLen = PHASES[1].end - PHASES[1].start;
+    const perAction = actions.length > 0 ? phaseLen / actions.length : phaseLen;
+    const targetIdx = Math.floor((elapsed - PHASES[1].start) / perAction);
+
+    if(rs.preflopIdx === 0 && elapsed >= PHASES[1].start){
+      setStreet('PRE-FLOP');
+      appendLog({t:'street-hdr', s:'— PRE-FLOP —'});
+    }
+
+    while(rs.preflopIdx < Math.min(targetIdx + 1, actions.length)){
+      const action = actions[rs.preflopIdx];
+      const parsed = parseAction(action);
+      if(parsed){
+        setActiveRing(parsed.seat);
+        setActionBadge(parsed.seat, parsed.type, parsed.label);
+        if(parsed.amount > 0){ showBet(parsed.seat, parsed.amount); }
+        if(parsed.type === 'fold') setFolded(parsed.seat);
+        rs.pot += parsed.amount;
+        updatePot(rs.pot);
+      }
+      appendLog({t:'act', s:'  ' + action});
+      rs.preflopIdx++;
+    }
+  }
+
+  // FLOP
+  if(elapsed >= PHASES[2].start){
+    if(!rs.flopRevealed && h.board?.length >= 3){
+      rs.flopRevealed = true;
+      clearActiveRings(); clearBets();
+      revealBoard(h.board.slice(0,3));
+      setStreet('FLOP');
+      appendLog({t:'street-hdr', s:`— FLOP: ${h.board.slice(0,3).join(' ')} —`});
+    }
+    const actions = h.actions?.flop || [];
+    const phaseLen = PHASES[2].end - PHASES[2].start;
+    const perAction = actions.length > 0 ? phaseLen / actions.length : phaseLen;
+    const targetIdx = Math.floor((elapsed - PHASES[2].start) / perAction);
+    while(rs.flopIdx < Math.min(targetIdx + 1, actions.length)){
+      const action = actions[rs.flopIdx];
+      const parsed = parseAction(action);
+      if(parsed){
+        setActiveRing(parsed.seat);
+        setActionBadge(parsed.seat, parsed.type, parsed.label);
+        if(parsed.amount > 0){ showBet(parsed.seat, parsed.amount); }
+        if(parsed.type === 'fold') setFolded(parsed.seat);
+        rs.pot += parsed.amount; updatePot(rs.pot);
+      }
+      appendLog({t:'act', s:'  ' + action});
+      rs.flopIdx++;
+    }
+  }
+
+  // TURN
+  if(elapsed >= PHASES[3].start){
+    if(!rs.turnRevealed && h.board?.length >= 4){
+      rs.turnRevealed = true;
+      clearActiveRings(); clearBets();
+      revealBoard(h.board.slice(0,4));
+      setStreet('TURN');
+      appendLog({t:'street-hdr', s:`— TURN: ${h.board[3]} —`});
+    }
+    const actions = h.actions?.turn || [];
+    const phaseLen = PHASES[3].end - PHASES[3].start;
+    const perAction = actions.length > 0 ? phaseLen / actions.length : phaseLen;
+    const targetIdx = Math.floor((elapsed - PHASES[3].start) / perAction);
+    while(rs.turnIdx < Math.min(targetIdx + 1, actions.length)){
+      const action = actions[rs.turnIdx];
+      const parsed = parseAction(action);
+      if(parsed){
+        setActiveRing(parsed.seat); setActionBadge(parsed.seat, parsed.type, parsed.label);
+        if(parsed.amount > 0){ showBet(parsed.seat, parsed.amount); }
+        if(parsed.type === 'fold') setFolded(parsed.seat);
+        rs.pot += parsed.amount; updatePot(rs.pot);
+      }
+      appendLog({t:'act', s:'  ' + action});
+      rs.turnIdx++;
+    }
+  }
+
+  // RIVER
+  if(elapsed >= PHASES[4].start){
+    if(!rs.riverRevealed && h.board?.length >= 5){
+      rs.riverRevealed = true;
+      clearActiveRings(); clearBets();
+      revealBoard(h.board);
+      setStreet('RIVER');
+      appendLog({t:'street-hdr', s:`— RIVER: ${h.board[4]} —`});
+    }
+    const actions = h.actions?.river || [];
+    const phaseLen = PHASES[4].end - PHASES[4].start;
+    const perAction = actions.length > 0 ? phaseLen / actions.length : phaseLen;
+    const targetIdx = Math.floor((elapsed - PHASES[4].start) / perAction);
+    while(rs.riverIdx < Math.min(targetIdx + 1, actions.length)){
+      const action = actions[rs.riverIdx];
+      const parsed = parseAction(action);
+      if(parsed){
+        setActiveRing(parsed.seat); setActionBadge(parsed.seat, parsed.type, parsed.label);
+        if(parsed.amount > 0){ showBet(parsed.seat, parsed.amount); }
+        if(parsed.type === 'fold') setFolded(parsed.seat);
+        rs.pot += parsed.amount; updatePot(rs.pot);
+      }
+      appendLog({t:'act', s:'  ' + action});
+      rs.riverIdx++;
+    }
+  }
+
+  // RESULT
+  if(elapsed >= PHASES[5].start && !rs.resultShown){
+    rs.resultShown = true;
+    clearActiveRings(); clearBets();
+    if(h.board) revealBoard(h.board); // ensure all 5 cards shown
+    setStreet('SHOWDOWN');
+
+    document.getElementById(`sr${h.winner}`).classList.add('is-winner');
+    setActionBadge(h.winner, 'win', 'WINS $' + h.pot);
+
+    // Highlight winner cards
+    const shEl = document.getElementById(`sh${h.winner}`);
+    if(shEl) shEl.querySelectorAll('.hc').forEach(c => c.classList.add('winner-glow'));
+
+    // Animate chips to winner
+    animatePotToWinner(h.winner, h);
+
+    appendLog({t:'res', s:`${SEATS[h.winner].short} wins $${h.pot} — ${h.winHand}`});
+
+    // Commentary
+    for(const c of buildCommentary(h))
+      appendLog({t:'cmnt', s:`${SEATS[c.seat].emoji} ${SEATS[c.seat].short}: "${c.text}"`});
+
+    document.getElementById('annBody').textContent = buildAnnouncer(h);
+
+    // Win flash
+    const wf = document.getElementById('winFlash');
+    wf.textContent = SEATS[h.winner].short + ' wins $' + h.pot;
+    wf.classList.add('on');
+    setTimeout(()=> wf.classList.remove('on'), 2500);
+
+    // Update stacks display
+    for(let i=0;i<N;i++)
+      document.getElementById(`ss${i}`).textContent = '$' + (h.stacks[i] || 400);
+
+    updatePot(h.pot);
+  }
 }
 
-/* ════════════════════════════════════════════════════════════════
-   ANIMATED HAND PLAYBACK
-   Plays through each street sequentially with chip animations
-════════════════════════════════════════════════════════════════ */
-async function playHand(hand){
-  displayedHandIdx=hand.handIndex;
-  document.getElementById('handLabel').textContent='HAND #'+hand.handNumber;
-
-  const logLines=[];
-  logLines.push({t:'hdr',s:`━━ HAND #${hand.handNumber} ━━ ${SEATS[hand.dealer].short} deals ━━`});
-
-  // Reset all seat visuals
-  resetTable(hand);
-
-  // Show all hole cards face-up (the key new feature — full transparency)
-  showAllHoleCards(hand);
-  await sleep(400);
-
-  // Post blinds display
-  setActionBadge(hand.sb,'call','SB $1');
-  setActionBadge(hand.bb,'call','BB $2');
-  showBet(hand.sb,1);showBet(hand.bb,2);
-  logLines.push({t:'act',s:`${SEATS[hand.sb].short} posts SB $1 · ${SEATS[hand.bb].short} posts BB $2`});
-  renderLog(logLines);
-  await sleep(600);
-
-  let pot=3;
-  updatePot(pot);
-  animateChipsToCenter([hand.sb,hand.bb],[1,2],hand);
-
-  // Pre-flop
-  setStreet('PRE-FLOP');
-  logLines.push({t:'street-hdr',s:'— PRE-FLOP —'});
-  if(hand.actions?.preflop?.length){
-    for(const action of hand.actions.preflop){
-      const parsed=parseAction(action);
-      if(parsed){
-        setActiveRing(parsed.seat);
-        setActionBadge(parsed.seat,parsed.type,parsed.label);
-        if(parsed.amount>0){showBet(parsed.seat,parsed.amount);animateChipsToCenter([parsed.seat],[parsed.amount],hand);}
-        if(parsed.type==='fold') setFolded(parsed.seat);
-        pot+=parsed.amount;updatePot(pot);
-        logLines.push({t:'act',s:'  '+action});renderLog(logLines);
-        showActionFeed(action);
-        await sleep(320);
-      }
-    }
-  }
-  clearActiveRings();clearBets();
-
-  // Check if hand ended pre-flop
-  if(!hand.board||hand.board.length===0){
-    await showResult(hand,logLines);return;
-  }
-
-  // Flop
-  await sleep(400);
-  setStreet('FLOP');
-  revealBoard(hand.board.slice(0,3));
-  logLines.push({t:'street-hdr',s:`— FLOP: ${hand.board.slice(0,3).join(' ')} —`});
-  renderLog(logLines);
-  await sleep(600);
-  if(hand.actions?.flop?.length){
-    for(const action of hand.actions.flop){
-      const parsed=parseAction(action);
-      if(parsed){
-        setActiveRing(parsed.seat);
-        setActionBadge(parsed.seat,parsed.type,parsed.label);
-        if(parsed.amount>0){showBet(parsed.seat,parsed.amount);animateChipsToCenter([parsed.seat],[parsed.amount],hand);}
-        pot+=parsed.amount;updatePot(pot);
-        logLines.push({t:'act',s:'  '+action});renderLog(logLines);
-        showActionFeed(action);await sleep(300);
-      }
-    }
-  }
-  clearActiveRings();clearBets();
-
-  if(hand.board.length<4){await showResult(hand,logLines);return;}
-
-  // Turn
-  await sleep(400);
-  setStreet('TURN');
-  revealBoard(hand.board.slice(0,4));
-  logLines.push({t:'street-hdr',s:`— TURN: ${hand.board[3]} —`});
-  renderLog(logLines);
-  await sleep(600);
-  if(hand.actions?.turn?.length){
-    for(const action of hand.actions.turn){
-      const parsed=parseAction(action);
-      if(parsed){
-        setActiveRing(parsed.seat);
-        setActionBadge(parsed.seat,parsed.type,parsed.label);
-        if(parsed.amount>0){showBet(parsed.seat,parsed.amount);animateChipsToCenter([parsed.seat],[parsed.amount],hand);}
-        pot+=parsed.amount;updatePot(pot);
-        logLines.push({t:'act',s:'  '+action});renderLog(logLines);
-        showActionFeed(action);await sleep(300);
-      }
-    }
-  }
-  clearActiveRings();clearBets();
-
-  if(hand.board.length<5){await showResult(hand,logLines);return;}
-
-  // River
-  await sleep(400);
-  setStreet('RIVER');
-  revealBoard(hand.board);
-  logLines.push({t:'street-hdr',s:`— RIVER: ${hand.board[4]} —`});
-  renderLog(logLines);
-  await sleep(600);
-  if(hand.actions?.river?.length){
-    for(const action of hand.actions.river){
-      const parsed=parseAction(action);
-      if(parsed){
-        setActiveRing(parsed.seat);
-        setActionBadge(parsed.seat,parsed.type,parsed.label);
-        if(parsed.amount>0){showBet(parsed.seat,parsed.amount);animateChipsToCenter([parsed.seat],[parsed.amount],hand);}
-        pot+=parsed.amount;updatePot(pot);
-        logLines.push({t:'act',s:'  '+action});renderLog(logLines);
-        showActionFeed(action);await sleep(300);
-      }
-    }
-  }
-  clearActiveRings();clearBets();
-
-  await showResult(hand,logLines);
+// ════════════════════════════════════════════════════════════════
+// RENDER STATE MANAGEMENT
+// ════════════════════════════════════════════════════════════════
+function resetRenderState(idx){
+  renderState = {
+    handIdx: idx,
+    dealtCards: false,
+    preflopIdx: 0,
+    flopRevealed: false, flopIdx: 0,
+    turnRevealed: false, turnIdx: 0,
+    riverRevealed: false, riverIdx: 0,
+    resultShown: false,
+    pot: 3,
+  };
+  // Clear log for new hand
+  document.getElementById('logScroll').innerHTML = '';
 }
 
-async function showResult(hand,logLines){
-  await sleep(400);
-  setStreet('SHOWDOWN');
-  clearActiveRings();
-
-  // Highlight winner
-  document.getElementById(`sr${hand.winner}`).classList.add('is-winner');
-  setActionBadge(hand.winner,'win','WINS $'+hand.pot);
-
-  // Highlight winner's cards
-  const shEl=document.getElementById(`sh${hand.winner}`);
-  if(shEl) shEl.querySelectorAll('.hc').forEach(c=>c.classList.add('winner-glow'));
-
-  // Chips fly to winner
-  await animatePotToWinner(hand.winner,hand);
-
-  logLines.push({t:'res',s:`${SEATS[hand.winner].short} wins $${hand.pot} — ${hand.winHand}`});
-
-  // Commentary
-  const comments=buildCommentary(hand);
-  for(const c of comments) logLines.push({t:'cmnt',s:`${SEATS[c.seat].emoji} ${SEATS[c.seat].short}: "${c.text}"`});
-
-  renderLog(logLines);
-  document.getElementById('annBody').textContent=buildAnnouncer(hand);
-
-  // Win flash
-  const wf=document.getElementById('winFlash');
-  wf.textContent=SEATS[hand.winner].short+' wins $'+hand.pot;
-  wf.classList.add('on');
-  setTimeout(()=>wf.classList.remove('on'),2000);
-
-  // Update stacks
-  for(let i=0;i<N;i++) document.getElementById(`ss${i}`).textContent='$'+(hand.stacks[i]||400);
-
-  renderStats();renderHistory();
-}
-
-/* ════════════════════════════════════════════════════════════════
-   TABLE RENDER HELPERS
-════════════════════════════════════════════════════════════════ */
+// ════════════════════════════════════════════════════════════════
+// TABLE DOM HELPERS
+// ════════════════════════════════════════════════════════════════
 function resetTable(hand){
   for(let i=0;i<N;i++){
-    const ring=document.getElementById(`sr${i}`);
-    ring.className='seat-ring';
-    if(i===hand.dealer) ring.classList.add('is-dealer');
-    if(i===hand.sb)     ring.classList.add('is-sb');
-    if(i===hand.bb)     ring.classList.add('is-bb');
-    document.getElementById(`sa${i}`).style.display='none';
-    document.getElementById(`sb${i}`).textContent='';
-    document.getElementById(`sh${i}`).innerHTML='';
-    document.getElementById(`ss${i}`).textContent='$'+(hand.stacks[i]||400);
+    const ring = document.getElementById(`sr${i}`);
+    ring.className = 'seat-ring';
+    if(hand){
+      if(i === hand.dealer) ring.classList.add('is-dealer');
+      if(i === hand.sb)     ring.classList.add('is-sb');
+      if(i === hand.bb)     ring.classList.add('is-bb');
+    }
+    document.getElementById(`sa${i}`).style.display = 'none';
+    document.getElementById(`sb${i}`).textContent = '';
+    document.getElementById(`sh${i}`).innerHTML = '';
+    document.getElementById(`sh${i}`).style.opacity = '1';
   }
-  // Clear board
-  const br=document.getElementById('boardRow');
-  br.innerHTML='';
-  for(let i=0;i<5;i++){const d=document.createElement('div');d.className='bc empty';br.appendChild(d);}
-  // Clear chips layer
-  document.getElementById('chipsLayer').innerHTML='';
+  // Board
+  const br = document.getElementById('boardRow');
+  br.innerHTML = '';
+  for(let i=0;i<5;i++){
+    const d = document.createElement('div'); d.className = 'bc empty'; br.appendChild(d);
+  }
+  document.getElementById('chipsLayer').innerHTML = '';
   updatePot(0);
   setStreet('');
 }
 
 function showAllHoleCards(hand){
-  if(!hand.hole) return;
+  if(!hand?.hole) return;
   for(let i=0;i<N;i++){
     if(!hand.hole[i]) continue;
-    const el=document.getElementById(`sh${i}`);
-    el.innerHTML=hand.hole[i].map(c=>{
-      const isRed=c.endsWith('♥')||c.endsWith('♦');
-      const rank=c.slice(0,-1);const suit=c.slice(-1);
-      return`<div class="hc ${isRed?'red':'blk'}">
+    const el = document.getElementById(`sh${i}`);
+    el.innerHTML = hand.hole[i].map(c => {
+      const isRed = c.endsWith('♥') || c.endsWith('♦');
+      const rank = c.slice(0,-1), suit = c.slice(-1);
+      return `<div class="hc ${isRed?'red':'blk'}">
         <span class="rank" style="font-size:clamp(.42rem,.56vw,.66rem)">${escH(rank)}</span>
         <span class="suit" style="font-size:.7em">${escH(suit)}</span>
       </div>`;
@@ -977,180 +1099,199 @@ function showAllHoleCards(hand){
 }
 
 function revealBoard(cards){
-  const br=document.getElementById('boardRow');
-  const existing=br.querySelectorAll('.bc');
-  cards.forEach((c,i)=>{
-    const el=existing[i];if(!el)return;
+  const br = document.getElementById('boardRow');
+  const slots = br.querySelectorAll('.bc');
+  cards.forEach((c, i) => {
+    const el = slots[i]; if(!el) return;
     if(el.classList.contains('empty')){
-      const isRed=c.endsWith('♥')||c.endsWith('♦');
-      const rank=c.slice(0,-1),suit=c.slice(-1);
-      el.className=`bc ${isRed?'red':'blk'} reveal`;
-      el.innerHTML=`<span class="rank">${escH(rank)}</span><span class="suit">${escH(suit)}</span>`;
+      const isRed = c.endsWith('♥') || c.endsWith('♦');
+      const rank = c.slice(0,-1), suit = c.slice(-1);
+      el.className = `bc ${isRed?'red':'blk'} reveal`;
+      el.innerHTML = `<span class="rank">${escH(rank)}</span><span class="suit">${escH(suit)}</span>`;
     }
   });
 }
 
 function setStreet(name){
-  document.getElementById('streetInd').textContent=name;
+  document.getElementById('streetInd').textContent = name;
 }
-
 function updatePot(amt){
-  document.getElementById('potNum').textContent='$'+amt;
-  // Render chip coins in pot
-  const row=document.getElementById('potChipRow');
-  row.innerHTML='';
-  if(amt>0){
-    const chips=chipsForAmount(Math.min(amt,500));
-    chips.slice(0,12).forEach(d=>{
-      const c=document.createElement('div');
-      c.className='pot-chip-coin';
-      c.style.background=CHIP_COLORS[d]||'#888';
+  document.getElementById('potNum').textContent = '$' + amt;
+  const row = document.getElementById('potChipRow');
+  row.innerHTML = '';
+  if(amt > 0){
+    chipsFor(amt).forEach(d => {
+      const c = document.createElement('div');
+      c.className = 'pot-chip-coin';
+      c.style.background = CHIP_CLR[d] || '#888';
       row.appendChild(c);
     });
   }
 }
-
-function showBet(seatIdx,amount){
-  document.getElementById(`sb${seatIdx}`).textContent=amount>0?'$'+amount:'';
+function showBet(si, amt){
+  document.getElementById(`sb${si}`).textContent = amt > 0 ? '$'+amt : '';
 }
-function clearBets(){for(let i=0;i<N;i++) document.getElementById(`sb${i}`).textContent='';}
-
-function setActiveRing(seatIdx){
+function clearBets(){ for(let i=0;i<N;i++) document.getElementById(`sb${i}`).textContent = ''; }
+function setActiveRing(si){
   clearActiveRings();
-  document.getElementById(`sr${seatIdx}`).classList.add('active');
+  document.getElementById(`sr${si}`).classList.add('active');
 }
-function clearActiveRings(){for(let i=0;i<N;i++) document.getElementById(`sr${i}`).classList.remove('active');}
-
-function setFolded(seatIdx){
-  document.getElementById(`sr${seatIdx}`).classList.add('folded');
-  // Dim hole cards
-  const sh=document.getElementById(`sh${seatIdx}`);
-  if(sh) sh.style.opacity='.2';
+function clearActiveRings(){ for(let i=0;i<N;i++) document.getElementById(`sr${i}`).classList.remove('active'); }
+function setFolded(si){
+  document.getElementById(`sr${si}`).classList.add('folded');
+  document.getElementById(`sh${si}`).style.opacity = '.18';
 }
-
-function setActionBadge(seatIdx,type,label){
-  const el=document.getElementById(`sa${seatIdx}`);
-  el.style.display='block';
-  el.className='seat-action-badge '+type;
-  el.textContent=label;
-  setTimeout(()=>{if(el.textContent===label&&type!=='win')el.style.display='none';},2400);
+function setActionBadge(si, type, label){
+  const el = document.getElementById(`sa${si}`);
+  el.style.display = 'block';
+  el.className = 'seat-action-badge ' + type;
+  el.textContent = label;
+  setTimeout(()=>{ if(el.textContent===label && type!=='win') el.style.display='none'; }, 4000);
 }
 
-/* ════════════════════════════════════════════════════════════════
-   CHIP ANIMATIONS
-════════════════════════════════════════════════════════════════ */
-function getSeatPos(seatIdx){
-  // Returns {x,y} as % of felt area
-  const positions=[
-    {x:50,y:9},{x:79,y:16},{x:94,y:45},{x:80,y:79},{x:62,y:91},
-    {x:38,y:91},{x:20,y:79},{x:6,y:45},{x:21,y:16}
-  ];
-  return positions[seatIdx]||{x:50,y:50};
+// ── Chip animations
+function getSeatPos(si){
+  const P=[{x:50,y:9},{x:79,y:16},{x:94,y:45},{x:80,y:79},{x:62,y:91},
+           {x:38,y:91},{x:20,y:79},{x:6,y:45},{x:21,y:16}];
+  return P[si]||{x:50,y:50};
 }
-
-function animateChipsToCenter(seatIdxs,amounts,hand){
-  const felt=document.getElementById('feltArea');
-  const fw=felt.offsetWidth,fh=felt.offsetHeight;
-
-  seatIdxs.forEach((si,idx)=>{
-    const pos=getSeatPos(si);
-    const startX=pos.x/100*fw;
-    const startY=pos.y/100*fh;
-    const endX=fw/2;const endY=fh/2;
-    const dx=endX-startX,dy=endY-startY;
-
-    const chips=chipsForAmount(Math.min(amounts[idx]||2,50));
-    chips.slice(0,4).forEach((chipVal,ci)=>{
-      setTimeout(()=>{
-        const chip=document.createElement('div');
-        chip.className='chip-fly '+chipClass(chipVal);
-        chip.style.left=startX+'px';chip.style.top=startY+'px';
-        chip.style.setProperty('--fx',(endX-startX)+'px');
-        chip.style.setProperty('--fy',(endY-startY)+'px');
-        chip.style.background=CHIP_COLORS[chipVal]||'#888';
-        felt.appendChild(chip);
-        setTimeout(()=>chip.remove(),800);
-      },ci*60);
-    });
-  });
-}
-
-async function animatePotToWinner(winnerIdx,hand){
-  const felt=document.getElementById('feltArea');
-  const fw=felt.offsetWidth,fh=felt.offsetHeight;
-  const wpos=getSeatPos(winnerIdx);
-  const endX=wpos.x/100*fw,endY=wpos.y/100*fh;
-
-  // Spray chips from center to winner
-  const chips=chipsForAmount(Math.min(hand.pot,200));
-  chips.slice(0,8).forEach((chipVal,ci)=>{
+function animatePotToWinner(wi, hand){
+  const felt = document.getElementById('feltArea');
+  const fw = felt.offsetWidth, fh = felt.offsetHeight;
+  const wpos = getSeatPos(wi);
+  const endX = wpos.x/100*fw, endY = wpos.y/100*fh;
+  chipsFor(Math.min(hand.pot, 200)).slice(0,8).forEach((chipVal, ci) => {
     setTimeout(()=>{
-      const chip=document.createElement('div');
-      chip.className='chip-fly '+chipClass(chipVal);
-      chip.style.left=(fw/2)+'px';chip.style.top=(fh/2)+'px';
-      // Reversed direction (center → winner)
-      chip.style.setProperty('--fx',-(fw/2-endX)+'px');
-      chip.style.setProperty('--fy',-(fh/2-endY)+'px');
-      chip.style.background=CHIP_COLORS[chipVal]||'#888';
-      chip.style.animationDelay=(ci*40)+'ms';
+      const chip = document.createElement('div');
+      chip.className = 'chip-fly ' + chipCls(chipVal);
+      chip.style.left = (fw/2) + 'px'; chip.style.top = (fh/2) + 'px';
+      chip.style.setProperty('--fx', -(fw/2-endX)+'px');
+      chip.style.setProperty('--fy', -(fh/2-endY)+'px');
+      chip.style.background = CHIP_CLR[chipVal] || '#888';
       felt.appendChild(chip);
-      setTimeout(()=>chip.remove(),900);
-    },ci*50);
+      setTimeout(()=> chip.remove(), 900);
+    }, ci * 55);
   });
-  await sleep(700);
-  updatePot(0);
+  setTimeout(()=> updatePot(0), 800);
 }
 
-function showActionFeed(text){
-  const felt=document.getElementById('feltArea');
-  const prev=felt.querySelector('.action-feed');if(prev)prev.remove();
-  const el=document.createElement('div');
-  el.className='action-feed';el.textContent=text;
-  felt.appendChild(el);
-  setTimeout(()=>el.remove(),3100);
+// ── Log
+const MAX_LOG_LINES = 80;
+function appendLog(line){
+  const scroll = document.getElementById('logScroll');
+  const div = document.createElement('div');
+  div.className = 'll ' + line.t;
+  div.textContent = line.s;
+  scroll.appendChild(div);
+  // Trim old lines
+  while(scroll.children.length > MAX_LOG_LINES) scroll.removeChild(scroll.firstChild);
+  scroll.scrollTop = scroll.scrollHeight;
 }
 
-/* ════════════════════════════════════════════════════════════════
-   ACTION PARSER
-   Parses action strings like "GPT-5.2: RAISE to $18" into structured data
-════════════════════════════════════════════════════════════════ */
-function parseAction(actionStr){
-  // Find which seat this is
-  let seatIdx=-1;
-  for(let i=0;i<N;i++){
-    if(actionStr.includes(SEATS[i].short)){seatIdx=i;break;}
+// ── Action parser
+function parseAction(str){
+  let si = -1;
+  for(let i=0;i<N;i++){ if(str.includes(SEATS[i].short)){si=i;break;} }
+  if(si===-1) return null;
+  const up = str.toUpperCase();
+  let type='act', amount=0, label=SEATS[si].short;
+  if(up.includes('FOLD')){type='fold';label='FOLD';}
+  else if(up.includes('CHECK')){type='check';label='CHECK';}
+  else if(up.includes('RAISE')||up.includes('BET')){
+    type='raise'; const m=str.match(/\$(\d+)/); amount=m?+m[1]:0; label='RAISE $'+amount;
   }
-  if(seatIdx===-1) return null;
-
-  const upper=actionStr.toUpperCase();
-  let type='act',amount=0,label=SEATS[seatIdx].short;
-
-  if(upper.includes('FOLD')){type='fold';label='FOLD';}
-  else if(upper.includes('CHECK')){type='check';label='CHECK';}
-  else if(upper.includes('RAISE')||upper.includes('BET')){
-    type='raise';
-    const m=actionStr.match(/\$(\d+)/);
-    amount=m?parseInt(m[1]):0;
-    label='RAISE $'+amount;
+  else if(up.includes('CALL')){
+    type='call'; const m=str.match(/\$(\d+)/); amount=m?+m[1]:0; label=amount?'CALL $'+amount:'CALL';
   }
-  else if(upper.includes('CALL')){
-    type='call';
-    const m=actionStr.match(/\$(\d+)/);
-    amount=m?parseInt(m[1]):0;
-    label=amount>0?'CALL $'+amount:'CALL';
+  else if(up.includes('POST')){
+    type='call'; const m=str.match(/\$(\d+)/); amount=m?+m[1]:0; label='POST $'+amount;
   }
-  else if(upper.includes('POST')||upper.includes('SB')||upper.includes('BB')){
-    type='call';
-    const m=actionStr.match(/\$(\d+)/);
-    amount=m?parseInt(m[1]):0;
-    label='POST $'+amount;
-  }
-  return{seat:seatIdx,type,amount,label};
+  return{seat:si,type,amount,label};
 }
 
-/* ════════════════════════════════════════════════════════════════
-   ANNOUNCER & COMMENTARY
-════════════════════════════════════════════════════════════════ */
+// ════════════════════════════════════════════════════════════════
+// HISTORY REPLAY — separate from live, uses speed selector
+// ════════════════════════════════════════════════════════════════
+function replayFromHistory(handIdx){
+  if(!ledger?.recentHands) return;
+  const hand = ledger.recentHands.find(h => h.handIndex === handIdx);
+  if(!hand) return;
+  isReplaying = true;
+  replayHand(hand).then(()=>{
+    isReplaying = false;
+    // Snap back to live
+    liveHandIdx = -1;
+  });
+}
+
+function getReplaySpeed(){ return parseFloat(document.getElementById('speedSel')?.value || 1); }
+function rsleep(ms){ return new Promise(r => setTimeout(r, ms / getReplaySpeed())); }
+
+async function replayHand(hand){
+  resetRenderState(hand.handIndex);
+  resetTable(hand);
+  appendLog({t:'hdr', s:`━━ REPLAY: HAND #${hand.handNumber} ━━ ${SEATS[hand.dealer].short} deals ━━`});
+
+  showAllHoleCards(hand);
+  await rsleep(1200);
+
+  appendLog({t:'act', s:`${SEATS[hand.sb].short} posts SB $1  ·  ${SEATS[hand.bb].short} posts BB $2`});
+  showBet(hand.sb,1); showBet(hand.bb,2);
+  let pot = 3; updatePot(pot);
+  await rsleep(1200);
+
+  const streets = [
+    {key:'preflop', label:'PRE-FLOP', board:null},
+    {key:'flop',    label:'FLOP',     board:hand.board?.slice(0,3)},
+    {key:'turn',    label:'TURN',     board:hand.board?.slice(0,4)},
+    {key:'river',   label:'RIVER',    board:hand.board},
+  ];
+
+  for(const st of streets){
+    const actions = hand.actions?.[st.key] || [];
+    if(!actions.length && !st.board) continue;
+    clearActiveRings(); clearBets();
+    if(st.board){ revealBoard(st.board); await rsleep(900); }
+    setStreet(st.label);
+    appendLog({t:'street-hdr', s:`— ${st.label}${st.board?' : '+st.board.slice(st.board.length===3?0:st.board.length-1).join(' '):''} —`});
+    for(const action of actions){
+      const p = parseAction(action);
+      if(p){
+        setActiveRing(p.seat); setActionBadge(p.seat, p.type, p.label);
+        if(p.amount>0) showBet(p.seat, p.amount);
+        if(p.type==='fold') setFolded(p.seat);
+        pot += p.amount; updatePot(pot);
+      }
+      appendLog({t:'act', s:'  '+action});
+      await rsleep(950);
+    }
+  }
+
+  clearActiveRings(); clearBets();
+  if(hand.board) revealBoard(hand.board);
+  setStreet('SHOWDOWN');
+  document.getElementById(`sr${hand.winner}`).classList.add('is-winner');
+  setActionBadge(hand.winner, 'win', 'WINS $'+hand.pot);
+  const shEl = document.getElementById(`sh${hand.winner}`);
+  if(shEl) shEl.querySelectorAll('.hc').forEach(c=>c.classList.add('winner-glow'));
+  animatePotToWinner(hand.winner, hand);
+  appendLog({t:'res', s:`${SEATS[hand.winner].short} wins $${hand.pot} — ${hand.winHand}`});
+  for(const c of buildCommentary(hand))
+    appendLog({t:'cmnt', s:`${SEATS[c.seat].emoji} ${SEATS[c.seat].short}: "${c.text}"`});
+  document.getElementById('annBody').textContent = buildAnnouncer(hand);
+  for(let i=0;i<N;i++) document.getElementById(`ss${i}`).textContent = '$'+(hand.stacks[i]||400);
+
+  const wf = document.getElementById('winFlash');
+  wf.textContent = SEATS[hand.winner].short+' wins $'+hand.pot;
+  wf.classList.add('on');
+  setTimeout(()=>wf.classList.remove('on'), 2500);
+
+  await rsleep(6000); // linger on result before returning to live
+}
+
+// ════════════════════════════════════════════════════════════════
+// ANNOUNCER & COMMENTARY
+// ════════════════════════════════════════════════════════════════
 const ANN=[
   h=>`${SEATS[h.winner].name} takes the pot. $${h.pot} across the felt.`,
   h=>`${SEATS[h.winner].short} tables ${h.winHand}. $${h.pot}.`,
@@ -1162,55 +1303,42 @@ const WIN_C=['Executed the plan.','The range held.','Expected value, collected.'
 const OBS_C=['Noted the sizing. Filing it.','Interesting line.','Variance. It exists.','That fold was correct.','The bet told me everything.'];
 
 function buildAnnouncer(hand){
-  let base=ANN[hand.handNumber%ANN.length](hand);
+  let base = ANN[hand.handNumber % ANN.length](hand);
   if(hand.winHand==='Uncontested') return`${SEATS[hand.winner].short} takes $${hand.pot} — all others folded.`;
   if(hand.winHand?.includes('Flush')||hand.winHand?.includes('Full')||hand.winHand?.includes('Four'))
     return base+' Premium hand, premium board. Variance in its finest dress.';
-  if(hand.sdSeats?.length>=3) return base+' Three-way showdown — range advantage was evident from the flop.';
+  if(hand.sdSeats?.length>=3) return base+' Three-way showdown. Range advantage was evident from the flop.';
   if(ledger?.lifetimeStats){
     const lp=ledger.lifetimeStats.byPlayer[hand.winner];
-    const total=ledger.lifetimeStats.handsDealt;
-    if(lp&&total>10&&lp.wins/total>0.14)
-      return base+` ${SEATS[hand.winner].short} leads all-time with ${lp.wins} pots won.`;
+    const tot=ledger.lifetimeStats.handsDealt;
+    if(lp&&tot>10&&lp.wins/tot>0.14) return base+` ${SEATS[hand.winner].short} leads all-time with ${lp.wins} pots won.`;
   }
   return base;
 }
-
 function buildCommentary(hand){
-  const lines=[];const n=hand.handNumber;
+  const lines=[], n=hand.handNumber;
   const r=x=>(Math.imul(n*0x9f4b+x*0x1234,0xabc1)>>>0)/4294967296;
-  if(r(1)<0.6) lines.push({seat:hand.winner,text:WIN_C[n%WIN_C.length]});
+  if(r(1)<0.6) lines.push({seat:hand.winner, text:WIN_C[n%WIN_C.length]});
   if(r(2)<0.38){
     const other=(hand.winner+1+Math.floor(r(3)*(N-1)))%N;
-    lines.push({seat:other,text:OBS_C[n%OBS_C.length]});
+    lines.push({seat:other, text:OBS_C[n%OBS_C.length]});
   }
   return lines;
 }
 
-/* ════════════════════════════════════════════════════════════════
-   LOG RENDER
-════════════════════════════════════════════════════════════════ */
-function renderLog(lines){
-  const el=document.getElementById('logScroll');
-  el.innerHTML=lines.map(l=>`<div class="ll ${l.t}">${escH(l.s)}</div>`).join('');
-  el.scrollTop=el.scrollHeight;
-}
-
-/* ════════════════════════════════════════════════════════════════
-   SIDEBAR PANELS
-════════════════════════════════════════════════════════════════ */
+// ════════════════════════════════════════════════════════════════
+// SIDEBAR PANELS
+// ════════════════════════════════════════════════════════════════
 function renderStats(){
-  if(!ledger)return;
+  if(!ledger) return;
   const el=document.getElementById('statsEl');
-  const ls=ledger.lifetimeStats;
-  const stacks=ledger.currentStacks;
-  const total=ls.handsDealt||1;
+  const ls=ledger.lifetimeStats, stacks=ledger.currentStacks, total=ls.handsDealt||1;
   el.innerHTML=SEATS.map((seat,i)=>{
     const lp=ls.byPlayer[i];
     const wp=(lp.wins/total*100).toFixed(1);
     const sdp=lp.showdowns>0?(lp.showdownWins/lp.showdowns*100).toFixed(0):'—';
-    const stk=stacks[i]||400;const prof=stk-400;
-    const pc=prof>=0?'pos':'neg';const ps=prof>=0?'+$'+prof:'-$'+Math.abs(prof);
+    const stk=stacks[i]||400, prof=stk-400;
+    const pc=prof>=0?'pos':'neg', ps=prof>=0?'+$'+prof:'-$'+Math.abs(prof);
     return`<div class="scard">
       <div class="scard-head"><span style="font-size:1rem">${seat.emoji}</span>
         <div><div class="scard-name">${seat.short}</div>
@@ -1225,12 +1353,12 @@ function renderStats(){
 }
 
 function renderHistory(){
-  if(!ledger?.recentHands)return;
+  if(!ledger?.recentHands) return;
   const el=document.getElementById('histEl');
   const recent=[...ledger.recentHands].reverse().slice(0,60);
   if(!recent.length){el.innerHTML='<div class="ll dim" style="padding:.4rem 0;font-size:.74rem">No hands yet.</div>';return;}
   el.innerHTML=recent.map(h=>`
-    <div class="hcard" onclick="replayFromHistory(${h.handIndex})">
+    <div class="hcard" onclick="replayFromHistory(${h.handIndex})" title="Click to replay">
       <div class="hcard-num">HAND #${h.handNumber} · ${new Date(h.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</div>
       <div class="hcard-winner">${SEATS[h.winner].emoji} ${SEATS[h.winner].short} wins $${h.pot}</div>
       <div class="hcard-info">${h.winHand}</div>
@@ -1241,9 +1369,8 @@ function renderHistory(){
 
 function renderMiniHoleCards(hand){
   if(!hand.sdSeats?.length||!hand.hole) return '';
-  const shown=hand.sdSeats.slice(0,4);
-  return`<div class="hcard-cards">${shown.map(si=>{
-    const cards=hand.hole[si];if(!cards) return'';
+  return`<div class="hcard-cards">${hand.sdSeats.slice(0,4).map(si=>{
+    const cards=hand.hole[si];if(!cards)return'';
     return cards.map(c=>{
       const isRed=c.endsWith('♥')||c.endsWith('♦');
       const rank=c.slice(0,-1),suit=c.slice(-1);
@@ -1252,22 +1379,16 @@ function renderMiniHoleCards(hand){
   }).join('<span style="width:4px;display:inline-block"></span>')}</div>`;
 }
 
-function replayFromHistory(handIdx){
-  if(!ledger?.recentHands) return;
-  const hand=ledger.recentHands.find(h=>h.handIndex===handIdx);
-  if(hand){displayQueue.unshift(hand);if(!isPlaying)pumpQueue();}
-}
-
 function renderArchive(){
-  if(!ledger)return;
+  if(!ledger) return;
   const el=document.getElementById('archEl');
-  const ls=ledger.lifetimeStats;const meta=ledger.meta;
+  const ls=ledger.lifetimeStats, meta=ledger.meta;
   const genesis=new Date(meta.genesis);
-  const topW=ls.byPlayer.reduce((b,p)=>p.wins>b.wins?p:b,ls.byPlayer[0]);
+  const topW=ls.byPlayer.reduce((b,p)=>p.wins>b.wins?p:b, ls.byPlayer[0]);
   const allTime=ledger.allTimeHands||[];
   const bigPot=allTime.reduce((mx,h)=>h.pot>mx.pot?h:mx,{pot:0,n:0});
   const ageMs=Date.now()-genesis.getTime();
-  const days=Math.floor(ageMs/86400000),hrs=Math.floor((ageMs%86400000)/3600000);
+  const days=Math.floor(ageMs/86400000), hrs=Math.floor((ageMs%86400000)/3600000);
   el.innerHTML=`
     <p class="arch-note">The Saloon has been open since ${genesis.toLocaleDateString()} — an unbroken, append-only record of every hand dealt.</p>
     <div class="arch-stat"><span>Total Hands</span><b>${meta.totalHands.toLocaleString()}</b></div>
@@ -1306,32 +1427,15 @@ function sTb(name,btn){
   document.getElementById('pane-'+name).classList.add('on');
 }
 
-/* ════════════════════════════════════════════════════════════════
-   TICK
-════════════════════════════════════════════════════════════════ */
-function tick(){
-  document.getElementById('clockEl').textContent=
-    new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
-  const nowMs=Date.now();
-  const elapsed=(nowMs-GENESIS_MS)%(HAND_INTERVAL_SEC*1000);
-  const frac=elapsed/(HAND_INTERVAL_SEC*1000);
-  const sToNext=Math.ceil((HAND_INTERVAL_SEC*1000-elapsed)/1000);
-  document.getElementById('progressBar').style.width=(frac*100)+'%';
-  document.getElementById('progressLabel').textContent=
-    ledger?`Hand #${Math.floor((nowMs-GENESIS_MS)/(HAND_INTERVAL_SEC*1000))+1} · next in ${sToNext}s`:`Next hand in ${sToNext}s`;
-  if(nowMs-lastFetch>POLL_MS){lastFetch=nowMs;fetchLedger();}
-}
-
 function escH(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
-function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
 
-/* ════════════════════════════════════════════════════════════════
-   INIT
-════════════════════════════════════════════════════════════════ */
+// ════════════════════════════════════════════════════════════════
+// INIT
+// ════════════════════════════════════════════════════════════════
 buildSeats();
-lastFetch=Date.now();
+lastFetch = Date.now();
 fetchLedger();
-setInterval(tick,500);
+setInterval(tick, 250); // quarter-second tick drives everything
 </script>
 </body>
 </html>
