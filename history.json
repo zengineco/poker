@@ -1,0 +1,41 @@
+{
+  "meta": {
+    "title": "Halls of History — Eternal AI Cash Table",
+    "genesis": "2026-02-22T00:00:00.000Z",
+    "genesisHandIndex": 0,
+    "blinds": "1/2",
+    "note": "This file is the canonical ledger. It is append-only. It is never reset.",
+    "lastUpdated": "2026-02-22T00:00:00.000Z",
+    "lastHandIndex": -1,
+    "totalHands": 0,
+    "schema": "1.0"
+  },
+  "seats": [
+    {"id":0,"name":"GPT-5.2",        "short":"GPT-5.2",  "emoji":"🤖","arch":"LAG"},
+    {"id":1,"name":"Gemini 2.5 Pro", "short":"Gem 2.5",  "emoji":"🌐","arch":"TAG"},
+    {"id":2,"name":"Claude 3.7",     "short":"Cl 3.7",   "emoji":"🔬","arch":"TAG"},
+    {"id":3,"name":"o3-mini",        "short":"o3-mini",  "emoji":"⚡","arch":"GTO"},
+    {"id":4,"name":"Grok-3",         "short":"Grok-3",   "emoji":"🦅","arch":"LAG"},
+    {"id":5,"name":"Qwen3",          "short":"Qwen3",    "emoji":"🐉","arch":"TAG"},
+    {"id":6,"name":"Flash Exp",      "short":"Flash",    "emoji":"⚗️","arch":"LAG"},
+    {"id":7,"name":"Claude Opus 4",  "short":"Cl Opus",  "emoji":"👁️","arch":"TAG"},
+    {"id":8,"name":"DeepSeek R1",    "short":"DeepSeek", "emoji":"🧮","arch":"GTO"}
+  ],
+  "lifetimeStats": {
+    "handsDealt": 0,
+    "byPlayer": [
+      {"id":0,"wins":0,"potsWon":0,"showdowns":0,"showdownWins":0,"stackHigh":400,"stackLow":400},
+      {"id":1,"wins":0,"potsWon":0,"showdowns":0,"showdownWins":0,"stackHigh":400,"stackLow":400},
+      {"id":2,"wins":0,"potsWon":0,"showdowns":0,"showdownWins":0,"stackHigh":400,"stackLow":400},
+      {"id":3,"wins":0,"potsWon":0,"showdowns":0,"showdownWins":0,"stackHigh":400,"stackLow":400},
+      {"id":4,"wins":0,"potsWon":0,"showdowns":0,"showdownWins":0,"stackHigh":400,"stackLow":400},
+      {"id":5,"wins":0,"potsWon":0,"showdowns":0,"showdownWins":0,"stackHigh":400,"stackLow":400},
+      {"id":6,"wins":0,"potsWon":0,"showdowns":0,"showdownWins":0,"stackHigh":400,"stackLow":400},
+      {"id":7,"wins":0,"potsWon":0,"showdowns":0,"showdownWins":0,"stackHigh":400,"stackLow":400},
+      {"id":8,"wins":0,"potsWon":0,"showdowns":0,"showdownWins":0,"stackHigh":400,"stackLow":400}
+    ]
+  },
+  "currentStacks": [400,400,400,400,400,400,400,400,400],
+  "recentHands": [],
+  "allTimeHands": []
+}

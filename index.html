@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>🏛 Halls of History — AI Poker Table</title>
+<meta name="description" content="The Halls of History. An eternal $1/$2 AI cash table running since February 2026. Nine models. One ledger. No resets."/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;600;700&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+/* ══════════════════ ROOT ══════════════════ */
+:root{
+  --bg:#040608;--felt:#071410;
+  --gold:#c8a84b;--gold2:#f0d068;--golddim:#4a3c12;
+  --neon:#44ff99;--red2:#ff4466;--blue2:#44aaff;
+  --text:#e8dfc0;--muted:#6a6450;
+  --border:rgba(200,168,75,.15);--border2:rgba(200,168,75,.3);
+  --panel:rgba(5,7,10,.97);--r:12px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow-x:hidden}
+body{
+  font-family:'Rajdhani',sans-serif;color:var(--text);background:var(--bg);min-height:100vh;
+  background-image:
+    radial-gradient(ellipse 130% 55% at 50% -5%,rgba(26,100,55,.13),transparent 60%),
+    repeating-linear-gradient(45deg,rgba(200,168,75,.013) 0,rgba(200,168,75,.013) 1px,transparent 1px,transparent 30px);
+  background-attachment:fixed;
+}
+body::before{content:"";position:fixed;inset:0;z-index:9999;pointer-events:none;
+  background:repeating-linear-gradient(0deg,rgba(0,0,0,.04) 0,rgba(0,0,0,.04) 1px,transparent 1px,transparent 3px)}
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-thumb{background:var(--golddim);border-radius:2px}
+
+/* ══════════════════ TOPBAR ══════════════════ */
+.topbar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:.5rem 1.1rem;
+  background:linear-gradient(90deg,#020406,#050b08,#020406);
+  border-bottom:1px solid var(--border2);
+  position:sticky;top:0;z-index:200;gap:.75rem;flex-wrap:wrap;
+}
+.tb-left{display:flex;align-items:center;gap:.75rem}
+.tb-crest{font-size:1.5rem;filter:drop-shadow(0 0 10px rgba(200,168,75,.55))}
+.tb-title{font-family:'Cinzel',serif;font-size:1rem;letter-spacing:.07em;
+  background:linear-gradient(90deg,var(--gold),var(--gold2),var(--gold));
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.tb-sub{font-family:'Orbitron',sans-serif;font-size:.46rem;letter-spacing:.18em;color:var(--muted);display:block;margin-top:.05rem}
+.tb-right{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
+.live-pill{display:flex;align-items:center;gap:.3rem;font-family:'Orbitron',sans-serif;font-size:.56rem;
+  color:var(--red2);letter-spacing:.1em;padding:.22rem .55rem;border-radius:999px;
+  border:1px solid rgba(255,68,102,.3);background:rgba(255,68,102,.08)}
+.live-pill::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--red2);
+  box-shadow:0 0 8px rgba(255,68,102,.6);animation:lpulse 1.1s ease-in-out infinite}
+@keyframes lpulse{0%,100%{opacity:1}50%{opacity:.2}}
+.tb-stat{font-family:'Orbitron',sans-serif;font-size:.58rem;color:var(--gold);letter-spacing:.08em}
+.tb-clock{font-family:'Orbitron',sans-serif;font-size:.56rem;color:var(--muted);letter-spacing:.08em}
+.status-pill{font-family:'Orbitron',sans-serif;font-size:.5rem;letter-spacing:.1em;
+  padding:.2rem .5rem;border-radius:4px;border:1px solid;transition:all .4s}
+.status-pill.ok{color:var(--neon);border-color:rgba(68,255,153,.3);background:rgba(68,255,153,.07)}
+.status-pill.loading{color:var(--gold);border-color:rgba(200,168,75,.3);background:rgba(200,168,75,.07)}
+.status-pill.err{color:var(--red2);border-color:rgba(255,68,102,.3);background:rgba(255,68,102,.07)}
+
+/* ══════════════════ LAYOUT ══════════════════ */
+.stage{display:grid;grid-template-columns:1fr 300px;min-height:calc(100vh - 50px)}
+@media(max-width:900px){.stage{grid-template-columns:1fr}}
+.main-col{padding:.85rem;display:flex;flex-direction:column;gap:.85rem;border-right:1px solid var(--border)}
+
+/* ══════════════════ FELT TABLE ══════════════════ */
+.felt-wrap{position:relative;width:100%;padding-bottom:50%;min-height:200px}
+.felt-svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+
+/* SEATS */
+.seat{position:absolute;display:flex;flex-direction:column;align-items:center;gap:.12rem;
+  transform:translate(-50%,-50%);z-index:5;pointer-events:none}
+.sr{width:clamp(46px,5.5vw,66px);height:clamp(46px,5.5vw,66px);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  background:rgba(5,8,12,.92);border:2px solid rgba(200,168,75,.22);
+  box-shadow:0 4px 18px rgba(0,0,0,.55);transition:border-color .4s,box-shadow .4s;
+  position:relative;font-size:clamp(1.1rem,1.6vw,1.55rem)}
+.sr.is-dealer::after{content:"D";position:absolute;bottom:-3px;right:-3px;
+  width:16px;height:16px;border-radius:50%;background:var(--gold);color:#000;
+  font-weight:900;font-size:.56rem;display:flex;align-items:center;justify-content:center;
+  font-family:'Orbitron',sans-serif;border:1px solid #000}
+.sr.is-sb::before{content:"SB";position:absolute;top:-3px;left:-3px;
+  width:18px;height:18px;border-radius:50%;background:rgba(200,168,75,.82);color:#000;
+  font-weight:900;font-size:.48rem;display:flex;align-items:center;justify-content:center;
+  font-family:'Orbitron',sans-serif}
+.sr.is-bb::before{content:"BB";position:absolute;top:-3px;left:-3px;
+  width:18px;height:18px;border-radius:50%;background:rgba(80,160,255,.82);color:#000;
+  font-weight:900;font-size:.48rem;display:flex;align-items:center;justify-content:center;
+  font-family:'Orbitron',sans-serif}
+.sr.is-winner{border-color:var(--neon)!important;
+  box-shadow:0 0 28px rgba(68,255,153,.65),0 4px 18px rgba(0,0,0,.55)!important;
+  animation:winpulse 1.2s ease-in-out 3}
+@keyframes winpulse{0%,100%{box-shadow:0 0 28px rgba(68,255,153,.6)}50%{box-shadow:0 0 52px rgba(68,255,153,.9)}}
+.sn{font-family:'Orbitron',sans-serif;font-size:clamp(.38rem,.52vw,.56rem);
+  letter-spacing:.04em;color:var(--gold);white-space:nowrap;text-align:center;max-width:75px}
+.ss{font-family:'Orbitron',sans-serif;font-size:clamp(.36rem,.48vw,.52rem);color:var(--muted)}
+.seat-cards{display:flex;gap:2px;margin-top:.1rem}
+.mc{width:clamp(12px,1.6vw,18px);height:clamp(17px,2.4vw,25px);border-radius:2px;
+  background:#f5eedd;border:1px solid rgba(0,0,0,.3);
+  display:flex;align-items:center;justify-content:center;
+  font-size:clamp(.4rem,.52vw,.6rem);font-weight:700;line-height:1}
+.mc.back{background:linear-gradient(135deg,#1a0535,#280a55);color:rgba(200,168,75,.2)}
+.mc.r{color:#c81a28}.mc.b{color:#111}
+
+/* BOARD + POT */
+.center-info{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  text-align:center;pointer-events:none;z-index:4;min-width:190px}
+.pot-lbl{font-family:'Orbitron',sans-serif;font-size:clamp(.48rem,.62vw,.68rem);
+  color:var(--muted);letter-spacing:.15em}
+.pot-amt{font-family:'Cinzel',serif;font-size:clamp(.95rem,1.6vw,1.5rem);
+  color:var(--gold2);text-shadow:0 0 18px rgba(240,208,104,.4);margin:.1rem 0}
+.board{display:flex;gap:3px;justify-content:center;margin-top:.2rem}
+.bc{width:clamp(21px,2.9vw,35px);height:clamp(29px,4vw,49px);border-radius:4px;
+  background:#f5eedd;border:2px solid rgba(200,168,75,.25);
+  display:flex;align-items:center;justify-content:center;
+  font-size:clamp(.48rem,.82vw,.92rem);font-weight:700;box-shadow:0 2px 10px rgba(0,0,0,.5)}
+.bc.empty{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.07);color:transparent}
+.bc.r{color:var(--red2)}.bc.b{color:#111}
+
+/* ══════════════════ TICKER ══════════════════ */
+.ticker{overflow:hidden;height:24px;background:rgba(0,0,0,.5);
+  border-bottom:1px solid rgba(200,168,75,.07)}
+.ticker-inner{display:flex;white-space:nowrap;animation:tick 40s linear infinite;height:100%}
+.ticker-inner span{font-family:'Orbitron',sans-serif;font-size:.55rem;letter-spacing:.1em;
+  color:var(--gold);padding:0 2.5rem;display:flex;align-items:center}
+.ticker-inner span em{color:var(--neon);font-style:normal}
+@keyframes tick{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+
+/* ══════════════════ ANNOUNCER ══════════════════ */
+.announcer{background:linear-gradient(135deg,rgba(200,168,75,.07),rgba(26,100,55,.05));
+  border:1px solid rgba(200,168,75,.2);border-radius:var(--r);padding:.75rem 1rem}
+.ann-head{font-family:'Cinzel',serif;font-size:.8rem;color:var(--gold2);margin-bottom:.35rem;
+  letter-spacing:.07em;display:flex;align-items:center;gap:.5rem}
+.ann-head::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--golddim),transparent)}
+.ann-body{font-family:'Courier Prime',monospace;font-size:.79rem;line-height:1.7;color:var(--text);min-height:2.5rem}
+
+/* ══════════════════ LOG ══════════════════ */
+.log-box{background:rgba(5,8,12,.85);border:1px solid var(--border);border-radius:var(--r);padding:.75rem}
+.log-title{font-family:'Cinzel',serif;font-size:.78rem;color:var(--gold);margin-bottom:.45rem;
+  letter-spacing:.07em;display:flex;align-items:center;gap:.5rem}
+.log-title::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--golddim),transparent)}
+.log-scroll{height:185px;overflow-y:auto;font-family:'Courier Prime',monospace;font-size:.77rem;line-height:1.75}
+.ll{padding:.03rem 0;border-bottom:1px solid rgba(255,255,255,.025)}
+.ll.hdr{color:var(--gold2);font-weight:700;margin-top:.2rem;border:none}
+.ll.act{color:var(--text)}.ll.res{color:var(--neon);font-weight:700}
+.ll.ctx{color:var(--gold);font-style:italic}
+.ll.cmnt{color:rgba(200,168,75,.62)}
+.ll.ann{color:var(--gold2);background:rgba(200,168,75,.05);padding:.18rem .32rem;border-radius:3px;border:none;margin:.12rem 0}
+.ll.dim{color:var(--muted)}
+
+/* ══════════════════ SIDEBAR ══════════════════ */
+.sidebar{background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+@media(max-width:900px){.sidebar{border-left:none;border-top:1px solid var(--border)}}
+.sb-tabs{display:flex;border-bottom:1px solid var(--border);flex-shrink:0}
+.sb-tab{flex:1;padding:.45rem .25rem;border:none;background:none;cursor:pointer;
+  font-family:'Orbitron',sans-serif;font-size:.48rem;letter-spacing:.06em;color:var(--muted);
+  border-bottom:2px solid transparent;transition:all .2s}
+.sb-tab.on{color:var(--gold);border-bottom-color:var(--gold)}
+.sb-pane{display:none;overflow-y:auto;padding:.65rem;flex:1}
+.sb-pane.on{display:block}
+
+/* STATS CARDS */
+.scard{background:rgba(255,255,255,.028);border:1px solid var(--border);border-radius:8px;padding:.58rem;margin-bottom:.5rem}
+.scard-head{display:flex;align-items:center;gap:.4rem;margin-bottom:.38rem}
+.scard-name{font-family:'Cinzel',serif;font-size:.73rem;color:var(--gold)}
+.scard-arch{font-family:'Orbitron',sans-serif;font-size:.46rem;color:var(--muted);letter-spacing:.06em}
+.sgrid{display:grid;grid-template-columns:1fr 1fr;gap:.22rem .45rem}
+.sg{font-size:.7rem}.sg b{font-family:'Orbitron',sans-serif;font-size:.6rem;color:var(--gold)}
+.profit-pos{color:var(--neon)!important}.profit-neg{color:var(--red2)!important}
+.lifetime-row{display:flex;align-items:center;justify-content:space-between;
+  font-family:'Orbitron',sans-serif;font-size:.52rem;padding:.22rem 0;
+  border-bottom:1px solid rgba(255,255,255,.04);color:var(--muted)}
+.lifetime-row b{color:var(--gold)}
+
+/* HISTORY */
+.hcard{background:rgba(255,255,255,.025);border:1px solid var(--border);border-radius:6px;
+  padding:.48rem;margin-bottom:.38rem;font-size:.76rem;cursor:default}
+.hcard:hover{border-color:rgba(200,168,75,.3)}
+.hcard-num{font-family:'Orbitron',sans-serif;font-size:.52rem;color:var(--golddim);margin-bottom:.15rem}
+.hcard-winner{color:var(--neon);font-weight:600}
+.hcard-info{color:var(--muted);font-family:'Orbitron',sans-serif;font-size:.55rem;margin-top:.08rem}
+.hcard-board{color:rgba(200,168,75,.6);font-size:.6rem;margin-top:.05rem;font-family:'Courier Prime',monospace}
+
+/* ARCHIVE */
+.archive-note{font-family:'Courier Prime',monospace;font-size:.72rem;color:var(--muted);line-height:1.65;margin-bottom:.6rem}
+.archive-stat{display:flex;justify-content:space-between;padding:.25rem 0;
+  border-bottom:1px solid rgba(255,255,255,.04);font-size:.72rem}
+.archive-stat b{font-family:'Orbitron',sans-serif;font-size:.62rem;color:var(--gold)}
+
+/* SEATS INFO */
+.si-card{background:rgba(255,255,255,.025);border:1px solid var(--border);border-radius:8px;padding:.62rem;margin-bottom:.48rem}
+.si-bio{font-family:'Courier Prime',monospace;font-size:.7rem;color:var(--muted);line-height:1.5;margin-top:.3rem}
+.arch-tag{display:inline-block;padding:.08rem .38rem;border-radius:4px;
+  font-family:'Orbitron',sans-serif;font-size:.46rem;letter-spacing:.07em;border:1px solid}
+.arch-lag{background:rgba(255,68,102,.1);border-color:rgba(255,68,102,.3);color:var(--red2)}
+.arch-tag2{background:rgba(68,255,153,.09);border-color:rgba(68,255,153,.3);color:var(--neon)}
+.arch-gto{background:rgba(68,170,255,.09);border-color:rgba(68,170,255,.3);color:var(--blue2)}
+
+/* FLASH */
+.flash-win{position:fixed;top:44%;left:50%;transform:translate(-50%,-50%);
+  font-family:'Cinzel',serif;font-size:clamp(1.2rem,3.2vw,2.4rem);
+  color:var(--gold2);text-shadow:0 0 40px rgba(240,208,104,.85);
+  pointer-events:none;opacity:0;z-index:1000;letter-spacing:.07em;text-align:center;
+  transition:opacity .12s}
+.flash-win.on{opacity:1}
+
+/* NEXT HAND BAR */
+.next-wrap{display:flex;flex-direction:column;gap:.2rem}
+.next-bar-bg{height:3px;background:rgba(200,168,75,.08);border-radius:2px;overflow:hidden}
+.next-bar{height:100%;background:linear-gradient(90deg,var(--golddim),var(--gold));border-radius:2px;transition:width .9s linear}
+.next-lbl{font-family:'Orbitron',sans-serif;font-size:.5rem;color:var(--muted);letter-spacing:.1em;text-align:right}
+
+/* FOOTER */
+.ch-footer{padding:.38rem 1.1rem;background:rgba(0,0,0,.72);border-top:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+.ch-footer .brand{font-family:'Cinzel',serif;font-size:.8rem;
+  background:linear-gradient(90deg,var(--gold),var(--gold2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.ch-footer .info{font-family:'Orbitron',sans-serif;font-size:.46rem;color:var(--muted);letter-spacing:.08em}
+</style>
+</head>
+<body>
+
+<!-- ══ TOPBAR ══ -->
+<div class="topbar">
+  <div class="tb-left">
+    <span class="tb-crest">🏛️</span>
+    <div>
+      <div class="tb-title">Halls of History</div>
+      <span class="tb-sub">ETERNAL 1/2 NLHE · AI CASH TABLE · STRATEGY ARCHIVE · EST. FEB 2026</span>
+    </div>
+  </div>
+  <div class="tb-right">
+    <div class="live-pill">LIVE</div>
+    <div class="tb-stat" id="handLabel">HAND #—</div>
+    <div class="tb-stat" id="totalHandsLabel" style="color:var(--muted)">— TOTAL</div>
+    <div class="status-pill loading" id="statusPill">⟳ LOADING</div>
+    <div class="tb-clock" id="clockEl">00:00:00</div>
+  </div>
+</div>
+
+<!-- ══ TICKER ══ -->
+<div class="ticker">
+  <div class="ticker-inner">
+    <span>⬥ HALLS OF HISTORY ⬥ ETERNAL $1/$2 NLHE ⬥ 9 AI MODELS ⬥ EST. FEB 22 2026 ⬥ APPEND-ONLY LEDGER ⬥ NO RESETS ⬥ PURE DETERMINISTIC SIMULATION ⬥ </span>
+    <span>⬥ HALLS OF HISTORY ⬥ ETERNAL $1/$2 NLHE ⬥ 9 AI MODELS ⬥ EST. FEB 22 2026 ⬥ APPEND-ONLY LEDGER ⬥ NO RESETS ⬥ PURE DETERMINISTIC SIMULATION ⬥ </span>
+  </div>
+</div>
+
+<!-- ══ STAGE ══ -->
+<div class="stage">
+<div class="main-col">
+
+  <!-- FELT -->
+  <div class="felt-wrap">
+    <svg class="felt-svg" viewBox="0 0 900 450" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <radialGradient id="fg" cx="50%" cy="50%" r="60%">
+          <stop offset="0%" stop-color="#0c2118"/><stop offset="100%" stop-color="#050e08"/>
+        </radialGradient>
+        <filter id="ts"><feDropShadow dx="0" dy="5" stdDeviation="14" flood-color="rgba(0,0,0,.75)"/></filter>
+      </defs>
+      <ellipse cx="450" cy="225" rx="430" ry="208" fill="none" stroke="rgba(200,168,75,.2)" stroke-width="2.5" filter="url(#ts)"/>
+      <ellipse cx="450" cy="225" rx="420" ry="200" fill="url(#fg)"/>
+      <ellipse cx="450" cy="225" rx="404" ry="184" fill="none" stroke="rgba(200,168,75,.09)" stroke-width="1" stroke-dasharray="7 5"/>
+      <text x="450" y="240" text-anchor="middle" fill="rgba(200,168,75,.03)" font-size="88" font-family="Georgia,serif">♠ ♥ ♦ ♣</text>
+    </svg>
+
+    <!-- SEATS — 9 positions, ellipse layout -->
+    <div class="seat" style="left:50%;top:9%"   id="seat0"><div class="sr" id="sr0"><span id="se0">🤖</span></div><div class="sn" id="sn0">GPT-5.2</div><div class="ss" id="ss0">$400</div><div class="seat-cards" id="sc0"></div></div>
+    <div class="seat" style="left:79%;top:15%"  id="seat1"><div class="sr" id="sr1"><span id="se1">🌐</span></div><div class="sn" id="sn1">Gem 2.5</div><div class="ss" id="ss1">$400</div><div class="seat-cards" id="sc1"></div></div>
+    <div class="seat" style="left:95%;top:45%"  id="seat2"><div class="sr" id="sr2"><span id="se2">🔬</span></div><div class="sn" id="sn2">Cl 3.7</div><div class="ss" id="ss2">$400</div><div class="seat-cards" id="sc2"></div></div>
+    <div class="seat" style="left:80%;top:78%"  id="seat3"><div class="sr" id="sr3"><span id="se3">⚡</span></div><div class="sn" id="sn3">o3-mini</div><div class="ss" id="ss3">$400</div><div class="seat-cards" id="sc3"></div></div>
+    <div class="seat" style="left:61%;top:91%"  id="seat4"><div class="sr" id="sr4"><span id="se4">🦅</span></div><div class="sn" id="sn4">Grok-3</div><div class="ss" id="ss4">$400</div><div class="seat-cards" id="sc4"></div></div>
+    <div class="seat" style="left:39%;top:91%"  id="seat5"><div class="sr" id="sr5"><span id="se5">🐉</span></div><div class="sn" id="sn5">Qwen3</div><div class="ss" id="ss5">$400</div><div class="seat-cards" id="sc5"></div></div>
+    <div class="seat" style="left:20%;top:78%"  id="seat6"><div class="sr" id="sr6"><span id="se6">⚗️</span></div><div class="sn" id="sn6">Flash</div><div class="ss" id="ss6">$400</div><div class="seat-cards" id="sc6"></div></div>
+    <div class="seat" style="left:5%;top:45%"   id="seat7"><div class="sr" id="sr7"><span id="se7">👁️</span></div><div class="sn" id="sn7">Cl Opus</div><div class="ss" id="ss7">$400</div><div class="seat-cards" id="sc7"></div></div>
+    <div class="seat" style="left:21%;top:15%"  id="seat8"><div class="sr" id="sr8"><span id="se8">🧮</span></div><div class="sn" id="sn8">DeepSeek</div><div class="ss" id="ss8">$400</div><div class="seat-cards" id="sc8"></div></div>
+
+    <div class="center-info">
+      <div class="pot-lbl">POT</div>
+      <div class="pot-amt" id="potAmt">$0</div>
+      <div class="board" id="boardEl">
+        <div class="bc empty">—</div><div class="bc empty">—</div>
+        <div class="bc empty">—</div><div class="bc empty">—</div><div class="bc empty">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- NEXT HAND PROGRESS -->
+  <div class="next-wrap">
+    <div class="next-bar-bg"><div class="next-bar" id="nextBar" style="width:0%"></div></div>
+    <div class="next-lbl" id="nextLbl">Loading ledger…</div>
+  </div>
+
+  <!-- ANNOUNCER -->
+  <div class="announcer">
+    <div class="ann-head">📢 Announcer</div>
+    <div class="ann-body" id="annBody">Connecting to the Halls of History ledger…</div>
+  </div>
+
+  <!-- LOG -->
+  <div class="log-box">
+    <div class="log-title">📜 Hand Log</div>
+    <div class="log-scroll" id="logScroll">
+      <div class="ll dim">— Fetching hand history from ledger… —</div>
+    </div>
+  </div>
+
+</div><!-- /main-col -->
+
+<!-- ══ SIDEBAR ══ -->
+<div class="sidebar">
+  <div class="sb-tabs">
+    <button class="sb-tab on" onclick="sTb('stats',this)">📊 STATS</button>
+    <button class="sb-tab" onclick="sTb('seats',this)">🪑 SEATS</button>
+    <button class="sb-tab" onclick="sTb('hist',this)">📜 HIST</button>
+    <button class="sb-tab" onclick="sTb('archive',this)">🏛 ALL</button>
+  </div>
+  <div class="sb-pane on" id="pane-stats"><div id="statsEl"><div class="ll dim" style="padding:.5rem 0;font-size:.75rem">Loading…</div></div></div>
+  <div class="sb-pane" id="pane-seats"><div id="seatsEl"></div></div>
+  <div class="sb-pane" id="pane-hist"><div id="histEl"><div class="ll dim" style="padding:.5rem 0;font-size:.75rem">Loading…</div></div></div>
+  <div class="sb-pane" id="pane-archive"><div id="archiveEl"><div class="ll dim" style="padding:.5rem 0;font-size:.75rem">Loading…</div></div></div>
+</div>
+</div><!-- /stage -->
+
+<div class="ch-footer">
+  <span class="brand">Halls of History — Eternal AI Cash Table</span>
+  <span class="info">APPEND-ONLY LEDGER · GLOBALLY SYNCHRONIZED · NO RESETS · EST. FEB 22 2026</span>
+</div>
+
+<div class="flash-win" id="flashWin"></div>
+
+<script>
+'use strict';
+
+// ══════════════════════════════════════════════════════════════════════
+// CONFIG — UPDATE THIS WITH YOUR DATA REPO URL
+// ══════════════════════════════════════════════════════════════════════
+// Replace YOUR_GITHUB_USERNAME with your actual GitHub username.
+// The data repo must be named exactly: halls-of-history-data
+// and must be public.
+const DATA_URL = 'https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/halls-of-history-data/main/history.json';
+
+// How often the display page polls for new data (ms)
+// The Action runs every 10 min, so polling every 60s is sufficient
+const POLL_INTERVAL_MS = 60_000;
+
+// Hand interval — must match simulate.js exactly
+const HAND_INTERVAL_SEC = 28;
+
+// Genesis timestamp — must match simulate.js exactly
+const GENESIS_MS = Date.UTC(2026, 1, 22, 0, 0, 0); // 2026-02-22T00:00:00Z
+
+// ══════════════════════════════════════════════════════════════════════
+// SEAT DEFINITIONS (display only — authoritative data comes from ledger)
+// ══════════════════════════════════════════════════════════════════════
+const SEATS = [
+  {name:'GPT-5.2',        short:'GPT-5.2',  emoji:'🤖', arch:'LAG',
+   bio:'Balanced-aggressive. Wide opens in position. Capable multi-street bluffs. Slight tendency to over-value top-pair hands.'},
+  {name:'Gemini 2.5 Pro', short:'Gem 2.5',  emoji:'🌐', arch:'TAG',
+   bio:'Positionally precise. Strong flop equity reads. Favors check-raise with nutted draws on the turn.'},
+  {name:'Claude 3.7',     short:'Cl 3.7',   emoji:'🔬', arch:'TAG',
+   bio:'Conservative pre-flop. Probing post-flop bets. Excellent pot control. Rarely bluffs river without equity.'},
+  {name:'o3-mini',        short:'o3-mini',  emoji:'⚡', arch:'GTO',
+   bio:'Near-unexploitable frequencies. Mixed strategies across all streets. The hardest seat to read at the table.'},
+  {name:'Grok-3',         short:'Grok-3',   emoji:'🦅', arch:'LAG',
+   bio:'Wide range, maximum aggression. Frequent steal attempts. Occasional hero calls with reads. Fast and loose.'},
+  {name:'Qwen3',          short:'Qwen3',    emoji:'🐉', arch:'TAG',
+   bio:'Methodical. Strong multi-way discipline. High fold-to-4-bet frequency. Rarely commits without the best of it.'},
+  {name:'Flash Exp',      short:'Flash',    emoji:'⚗️', arch:'LAG',
+   bio:'Experimental polarized sizing. Unexpected slow-plays with strong hands. Turn over-bets for fold equity.'},
+  {name:'Claude Opus 4',  short:'Cl Opus',  emoji:'👁️', arch:'TAG',
+   bio:'Deep-stack specialist. Extremely patient. Delayed aggression on paired boards. River x/r is almost always nutted.'},
+  {name:'DeepSeek R1',    short:'DeepSeek', emoji:'🧮', arch:'GTO',
+   bio:'Solver-influenced ranges. Blocker-aware bluffing only. Balanced 3-bet pots. Lowest variance seat.'},
+];
+const N = 9;
+
+// ══════════════════════════════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════════════════════════════
+let ledger = null;                // the full history.json object
+let displayedHandIndex = -1;      // which hand we're currently showing
+let displayQueue = [];            // hands waiting to be shown one-by-one
+let isAnimating = false;
+
+// ══════════════════════════════════════════════════════════════════════
+// LEDGER FETCH
+// ══════════════════════════════════════════════════════════════════════
+async function fetchLedger() {
+  try {
+    setStatus('loading', '⟳ FETCHING');
+    // Cache-bust so we always get the latest commit
+    const res = await fetch(DATA_URL + '?t=' + Date.now());
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    ledger = await res.json();
+    setStatus('ok', '✓ LIVE');
+    onLedgerLoaded();
+  } catch (e) {
+    setStatus('err', '✗ OFFLINE');
+    document.getElementById('annBody').textContent =
+      'Unable to reach the ledger. Check that halls-of-history-data is public and DATA_URL is set correctly. ' + e.message;
+  }
+}
+
+function setStatus(type, text) {
+  const el = document.getElementById('statusPill');
+  el.className = 'status-pill ' + type;
+  el.textContent = text;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// WHEN LEDGER IS LOADED / REFRESHED
+// ══════════════════════════════════════════════════════════════════════
+function onLedgerLoaded() {
+  if (!ledger || !ledger.recentHands || !ledger.recentHands.length) {
+    document.getElementById('annBody').textContent =
+      'Ledger connected. No hands simulated yet — the GitHub Action will run within 10 minutes of your first commit.';
+    return;
+  }
+
+  const totalHands = ledger.meta.totalHands;
+  document.getElementById('totalHandsLabel').textContent = totalHands.toLocaleString() + ' TOTAL';
+
+  // Determine which hand to display right now based on wall clock
+  // The displayed hand = the hand that was "live" at the current moment
+  const nowHandIdx = currentDisplayHandIdx();
+
+  if (nowHandIdx > displayedHandIndex) {
+    // Queue any new hands we haven't shown yet (max 3 to avoid long catch-up)
+    const recent = ledger.recentHands;
+    const startFrom = Math.max(0, recent.length - 3);
+    for (let i = startFrom; i < recent.length; i++) {
+      const h = recent[i];
+      if (h.handIndex > displayedHandIndex && !displayQueue.find(q => q.handIndex === h.handIndex)) {
+        displayQueue.push(h);
+      }
+    }
+    // Sort queue ascending so we show oldest-first
+    displayQueue.sort((a, b) => a.handIndex - b.handIndex);
+    if (!isAnimating) pumpQueue();
+  }
+
+  // Always update sidebar stats and archive
+  renderStats();
+  renderHistory();
+  renderArchive();
+}
+
+// The hand "on air" right now — based on epoch math
+function currentDisplayHandIdx() {
+  return Math.floor((Date.now() - GENESIS_MS) / (HAND_INTERVAL_SEC * 1000));
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// DISPLAY QUEUE — shows hands one at a time, smooth TV rhythm
+// ══════════════════════════════════════════════════════════════════════
+function pumpQueue() {
+  if (displayQueue.length === 0) { isAnimating = false; return; }
+  isAnimating = true;
+  const hand = displayQueue.shift();
+  displayHand(hand);
+  // Next hand after a pause (faster if queue is building up)
+  const delay = displayQueue.length > 1 ? 4000 : 7000;
+  setTimeout(pumpQueue, delay);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// DISPLAY A HAND
+// ══════════════════════════════════════════════════════════════════════
+function displayHand(hand) {
+  displayedHandIndex = hand.handIndex;
+
+  // Header
+  document.getElementById('handLabel').textContent = 'HAND #' + hand.handNumber;
+
+  // Stacks
+  for (let i = 0; i < N; i++) {
+    document.getElementById(`ss${i}`).textContent = '$' + (hand.stacks[i] || 400);
+  }
+
+  // Seat rings — dealer/sb/bb/winner
+  for (let i = 0; i < N; i++) {
+    const ring = document.getElementById(`sr${i}`);
+    ring.className = 'sr';
+    if (i === hand.dealer)                      ring.classList.add('is-dealer');
+    if (i === hand.sb)                          ring.classList.add('is-sb');
+    if (i === hand.bb)                          ring.classList.add('is-bb');
+    if (i === hand.winner)                      ring.classList.add('is-winner');
+  }
+
+  // Board
+  renderBoard(hand.board || []);
+
+  // Pot
+  document.getElementById('potAmt').textContent = '$' + hand.pot;
+
+  // Hole cards — show showdown participants, others face-down
+  for (let i = 0; i < N; i++) {
+    const el = document.getElementById(`sc${i}`);
+    if (hand.sdSeats && hand.sdSeats.includes(i) && hand.hole && hand.hole[i]) {
+      el.innerHTML = hand.hole[i].map(c => {
+        const isRed = c.endsWith('♥') || c.endsWith('♦');
+        return `<div class="mc ${isRed ? 'r' : 'b'}">${escH(c)}</div>`;
+      }).join('');
+    } else {
+      el.innerHTML = '';
+    }
+  }
+
+  // Log
+  renderHandLog(hand);
+
+  // Announcer
+  document.getElementById('annBody').innerHTML = escH(buildAnnouncer(hand));
+
+  // Flash
+  const fw = document.getElementById('flashWin');
+  fw.textContent = `${SEATS[hand.winner].short} wins $${hand.pot}`;
+  fw.classList.add('on');
+  setTimeout(() => fw.classList.remove('on'), 1800);
+}
+
+function renderBoard(boardArr) {
+  const el = document.getElementById('boardEl');
+  el.innerHTML = '';
+  for (let i = 0; i < 5; i++) {
+    const d = document.createElement('div');
+    d.className = 'bc';
+    if (i < boardArr.length) {
+      const c = boardArr[i];
+      const isRed = c.endsWith('♥') || c.endsWith('♦');
+      d.classList.add(isRed ? 'r' : 'b');
+      d.textContent = c;
+    } else {
+      d.classList.add('empty');
+      d.textContent = '—';
+    }
+    el.appendChild(d);
+  }
+}
+
+function renderHandLog(hand) {
+  const lines = [];
+  lines.push({ t: 'hdr', s: `━━ HAND #${hand.handNumber} ━━ Dealer: ${SEATS[hand.dealer].short} ━━` });
+  lines.push({ t: 'act', s: `${SEATS[hand.sb].short} posts SB $1 · ${SEATS[hand.bb].short} posts BB $2` });
+
+  const streets = [
+    { key: 'preflop', label: 'PRE-FLOP' },
+    { key: 'flop',    label: hand.board && hand.board.length >= 3 ? `FLOP: ${hand.board.slice(0,3).join(' ')}` : null },
+    { key: 'turn',    label: hand.board && hand.board.length >= 4 ? `TURN: ${hand.board[3]}` : null },
+    { key: 'river',   label: hand.board && hand.board.length >= 5 ? `RIVER: ${hand.board[4]}` : null },
+  ];
+
+  for (const { key, label } of streets) {
+    if (!hand.actions || !hand.actions[key] || !hand.actions[key].length) continue;
+    if (label) lines.push({ t: 'act', s: label });
+    for (const action of hand.actions[key]) lines.push({ t: 'act', s: `  ${action}` });
+  }
+
+  if (hand.sdSeats && hand.sdSeats.length > 1) {
+    lines.push({ t: 'act', s: `SHOWDOWN (${hand.sdSeats.length} players):` });
+    for (const s of hand.sdSeats) {
+      if (hand.hole && hand.hole[s]) {
+        lines.push({ t: 'act', s: `  ${SEATS[s].short}: ${hand.hole[s].join(' ')}` });
+      }
+    }
+  }
+
+  lines.push({ t: 'res', s: `${SEATS[hand.winner].short} wins $${hand.pot} — ${hand.winHand}` });
+
+  // Brief commentary
+  const comments = buildCommentary(hand);
+  for (const c of comments) lines.push({ t: 'cmnt', s: `${SEATS[c.seat].emoji} ${SEATS[c.seat].short}: "${c.text}"` });
+
+  const scroll = document.getElementById('logScroll');
+  scroll.innerHTML = lines.map(l => `<div class="ll ${l.t}">${escH(l.s)}</div>`).join('');
+  scroll.scrollTop = scroll.scrollHeight;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// ANNOUNCER
+// ══════════════════════════════════════════════════════════════════════
+const ANN_TEMPLATES = [
+  h => `${SEATS[h.winner].name} collects the $${h.pot} pot.`,
+  h => `${SEATS[h.winner].short} tables ${h.winHand}. $${h.pot} moves across the felt.`,
+  h => `A ${h.winHand} for ${SEATS[h.winner].short}. Pot: $${h.pot}.`,
+  h => `${SEATS[h.winner].short} takes it. $${h.pot} pot. ${h.winHand}.`,
+  h => `The hand goes to ${SEATS[h.winner].name} — ${h.winHand}, $${h.pot}.`,
+];
+
+function buildAnnouncer(hand) {
+  const base = ANN_TEMPLATES[hand.handNumber % ANN_TEMPLATES.length](hand);
+  if (hand.winHand === 'Uncontested') return `${SEATS[hand.winner].short} takes $${hand.pot} — everyone else folded.`;
+  if (hand.winHand && (hand.winHand.includes('Flush') || hand.winHand.includes('Full') || hand.winHand.includes('Four')))
+    return base + ' The board ran out premium. Variance in its finest dress.';
+  if (hand.sdSeats && hand.sdSeats.length >= 3)
+    return base + ' Three-way showdown. Range advantage was clear from the flop.';
+  if (ledger && ledger.lifetimeStats) {
+    const lp = ledger.lifetimeStats.byPlayer[hand.winner];
+    const total = ledger.lifetimeStats.handsDealt;
+    if (lp && total > 10 && lp.wins > 0) {
+      const pct = (lp.wins / total * 100).toFixed(1);
+      if (parseFloat(pct) > 15) return base + ` ${SEATS[hand.winner].short} now leads all-time with ${lp.wins} pots won (${pct}% win rate).`;
+    }
+  }
+  return base;
+}
+
+const WIN_CMNT = ['Executed the plan.','The range held.','Expected value, collected.','The math cooperated.','I had the best of it throughout.'];
+const OBS_CMNT = ['Noted the sizing. Filing it away.','Interesting line. Will adjust.','Variance. It exists.','That fold might look wrong. It was not.','The bet told me everything I needed to know.'];
+
+function buildCommentary(hand) {
+  const lines = [];
+  const seed = hand.handNumber * 0x9f4b;
+  const r = () => { const x = (seed * 1664525 + 1013904223) & 0xffffffff; return (x >>> 0) / 4294967296; };
+  if (r() < 0.60) lines.push({ seat: hand.winner, text: WIN_CMNT[hand.handNumber % WIN_CMNT.length] });
+  if (r() < 0.38) {
+    let other = (hand.winner + 1 + Math.floor(r() * (N - 1))) % N;
+    lines.push({ seat: other, text: OBS_CMNT[hand.handNumber % OBS_CMNT.length] });
+  }
+  return lines;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// SIDEBAR RENDERS
+// ══════════════════════════════════════════════════════════════════════
+function renderStats() {
+  if (!ledger) return;
+  const el = document.getElementById('statsEl');
+  const ls = ledger.lifetimeStats;
+  const stacks = ledger.currentStacks;
+  const total = ls.handsDealt || 1;
+
+  el.innerHTML = SEATS.map((seat, i) => {
+    const lp = ls.byPlayer[i];
+    const winPct = total > 0 ? (lp.wins / total * 100).toFixed(1) : '0.0';
+    const sdWinPct = lp.showdowns > 0 ? (lp.showdownWins / lp.showdowns * 100).toFixed(0) : '—';
+    const stack = stacks[i] || 400;
+    const profit = stack - 400;
+    const pClass = profit >= 0 ? 'profit-pos' : 'profit-neg';
+    const pStr = profit >= 0 ? `+$${profit}` : `-$${Math.abs(profit)}`;
+    return `<div class="scard">
+      <div class="scard-head">
+        <span style="font-size:1.1rem">${seat.emoji}</span>
+        <div>
+          <div class="scard-name">${seat.short}</div>
+          <div class="scard-arch">${seat.arch} · Stack $${stack} · <span class="${pClass}">${pStr}</span></div>
+        </div>
+      </div>
+      <div class="sgrid">
+        <div class="sg">Win Rate: <b>${winPct}%</b></div>
+        <div class="sg">SD Win: <b>${sdWinPct}%</b></div>
+        <div class="sg">Pots Won: <b>${lp.wins}</b></div>
+        <div class="sg">Showdowns: <b>${lp.showdowns}</b></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderHistory() {
+  if (!ledger || !ledger.recentHands) return;
+  const el = document.getElementById('histEl');
+  const recent = [...ledger.recentHands].reverse().slice(0, 50);
+  if (!recent.length) { el.innerHTML = '<div class="ll dim" style="padding:.5rem 0;font-size:.75rem">No hands yet.</div>'; return; }
+  el.innerHTML = recent.map(h => `
+    <div class="hcard">
+      <div class="hcard-num">HAND #${h.handNumber} · ${new Date(h.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</div>
+      <div class="hcard-winner">${SEATS[h.winner].emoji} ${SEATS[h.winner].short} wins $${h.pot}</div>
+      <div class="hcard-info">${h.winHand}</div>
+      <div class="hcard-board">${(h.board || []).join(' ') || '—'}</div>
+    </div>`).join('');
+}
+
+function renderArchive() {
+  if (!ledger) return;
+  const el = document.getElementById('archiveEl');
+  const ls = ledger.lifetimeStats;
+  const meta = ledger.meta;
+  const genesis = new Date(meta.genesis);
+
+  // Top winner
+  const topWinner = ls.byPlayer.reduce((best, p) => p.wins > best.wins ? p : best, ls.byPlayer[0]);
+  const topName = SEATS[topWinner.id].short;
+
+  // Biggest pot from all-time
+  const allTime = ledger.allTimeHands || [];
+  const biggestPot = allTime.reduce((max, h) => h.pot > max.pot ? h : max, { pot: 0, n: 0 });
+
+  el.innerHTML = `
+    <p class="archive-note">The Halls of History have been open since ${genesis.toLocaleDateString()} at ${genesis.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})} UTC. This ledger is append-only and never resets. Every hand played since that moment is recorded here.</p>
+    <div class="archive-stat"><span>Total Hands Dealt</span><b>${meta.totalHands.toLocaleString()}</b></div>
+    <div class="archive-stat"><span>All-Time Win Leader</span><b>${topName} (${topWinner.wins})</b></div>
+    <div class="archive-stat"><span>Most Pots Won ($)</span><b>$${topWinner.potsWon.toLocaleString()}</b></div>
+    <div class="archive-stat"><span>Largest Pot</span><b>${biggestPot.pot ? '$'+biggestPot.pot+' (hand #'+biggestPot.n+')' : '—'}</b></div>
+    <div class="archive-stat"><span>Table Age</span><b>${tableAge(genesis)}</b></div>
+    <div style="margin-top:.7rem;font-family:'Orbitron',sans-serif;font-size:.52rem;color:var(--muted);letter-spacing:.07em;margin-bottom:.3rem">ALL-TIME WIN TABLE</div>
+    ${SEATS.map((s, i) => {
+      const lp = ls.byPlayer[i];
+      const pct = meta.totalHands > 0 ? (lp.wins / meta.totalHands * 100).toFixed(1) : '0.0';
+      const bar = Math.round(parseFloat(pct) * 2);
+      return `<div class="lifetime-row">${s.emoji} ${s.short} <b>${lp.wins} (${pct}%)</b></div>`;
+    }).join('')}
+    <div style="margin-top:.6rem">
+      <a href="https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/halls-of-history-data/main/history.json"
+         target="_blank" style="font-family:'Orbitron',sans-serif;font-size:.52rem;color:var(--gold);letter-spacing:.07em">
+        📄 View raw ledger →
+      </a>
+    </div>`;
+}
+
+function renderSeats() {
+  const el = document.getElementById('seatsEl');
+  el.innerHTML = SEATS.map((s, i) => `
+    <div class="si-card">
+      <div class="scard-head">
+        <span style="font-size:1.1rem">${s.emoji}</span>
+        <div>
+          <div class="scard-name">${s.name}</div>
+          <div class="scard-arch">SEAT ${i + 1} · FROZEN SNAPSHOT FEB 2026</div>
+        </div>
+      </div>
+      <div class="si-bio">${s.bio}</div>
+      <div style="margin-top:.32rem">
+        <span class="arch-tag arch-${s.arch === 'LAG' ? 'lag' : s.arch === 'GTO' ? 'gto' : 'tag2'}">${s.arch}</span>
+      </div>
+    </div>`).join('');
+}
+
+function tableAge(genesis) {
+  const ms = Date.now() - genesis.getTime();
+  const days = Math.floor(ms / 86400000);
+  const hours = Math.floor((ms % 86400000) / 3600000);
+  if (days > 0) return `${days}d ${hours}h`;
+  return `${hours}h`;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// TICK — clock, progress bar, periodic refetch
+// ══════════════════════════════════════════════════════════════════════
+let lastFetchTime = 0;
+
+function tick() {
+  // Clock
+  document.getElementById('clockEl').textContent =
+    new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+
+  // Progress bar (time until next hand "on air")
+  const nowMs = Date.now();
+  const elapsed = (nowMs - GENESIS_MS) % (HAND_INTERVAL_SEC * 1000);
+  const frac = elapsed / (HAND_INTERVAL_SEC * 1000);
+  const secToNext = Math.ceil((HAND_INTERVAL_SEC * 1000 - elapsed) / 1000);
+  document.getElementById('nextBar').style.width = (frac * 100) + '%';
+  document.getElementById('nextLbl').textContent = ledger
+    ? `Hand #${currentDisplayHandIdx() + 1} · next in ${secToNext}s`
+    : `Next hand in ${secToNext}s`;
+
+  // Poll for new ledger data every POLL_INTERVAL_MS
+  if (nowMs - lastFetchTime > POLL_INTERVAL_MS) {
+    lastFetchTime = nowMs;
+    fetchLedger();
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// SIDEBAR TAB SWITCHER
+// ══════════════════════════════════════════════════════════════════════
+function sTb(name, btn) {
+  document.querySelectorAll('.sb-tab').forEach(t => t.classList.remove('on'));
+  document.querySelectorAll('.sb-pane').forEach(p => p.classList.remove('on'));
+  btn.classList.add('on');
+  document.getElementById('pane-' + name).classList.add('on');
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// UTIL
+// ══════════════════════════════════════════════════════════════════════
+function escH(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════════════════════════════
+renderSeats();
+lastFetchTime = Date.now();
+fetchLedger();
+setInterval(tick, 500);
+</script>
+</body>
+</html>

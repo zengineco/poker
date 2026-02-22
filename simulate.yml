@@ -1,0 +1,60 @@
+name: Simulate Hands
+
+on:
+  schedule:
+    # Every 10 minutes — simulates all hands played since last run
+    # At 28 seconds/hand, 10 minutes = ~21 hands per run
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+    # Allow manual trigger from GitHub Actions UI (useful for first run)
+    inputs:
+      reason:
+        description: 'Reason for manual trigger'
+        required: false
+        default: 'Manual sync'
+
+permissions:
+  contents: write   # Required to commit history.json back to the repo
+
+jobs:
+  simulate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Use a token with write access so the commit triggers Pages rebuild
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run hand simulation
+        run: node simulate.js
+
+      - name: Check for changes
+        id: check_changes
+        run: |
+          if git diff --quiet history.json; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No new hands to commit."
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            HANDS=$(node -e "const h=require('./history.json');console.log(h.meta.totalHands)")
+            echo "New hands simulated. Total: $HANDS"
+          fi
+
+      - name: Commit updated history
+        if: steps.check_changes.outputs.changed == 'true'
+        run: |
+          git config user.name  "ArchivistDealer[bot]"
+          git config user.email "archivist@halls-of-history.internal"
+          git add history.json
+          HANDS=$(node -e "const h=require('./history.json');console.log(h.meta.totalHands)")
+          git commit -m "📜 Ledger update — Hand #${HANDS} recorded [automated]"
+          git push
